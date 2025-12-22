@@ -1,6 +1,7 @@
 """UI components for the FingerBlaster application."""
 
 import logging
+from typing import List, Tuple, Optional
 
 from textual.widgets import Static, Label, Digits
 from textual.containers import Vertical, Center
@@ -115,14 +116,115 @@ class StatsPanel(Static):
                f"POS  : [green]Y:{self.yes_balance:.1f}[/] | [red]N:{self.no_balance:.1f}[/]"
 
 
+class ProbabilityChart(Static):
+    """Custom widget for probability history chart with fixed x-axis."""
+    
+    def __init__(self, *args, x_max: float = 900.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.x_max = x_max  # Fixed x-axis maximum (900 seconds)
+        self.data: List[Tuple[float, float]] = []  # List of (x, y) tuples
+    
+    def update_data(self, data: List[Tuple[float, float]]) -> None:
+        """Update the chart data and refresh."""
+        self.data = data
+        self.refresh()
+    
+    def render(self) -> str:
+        """Render the chart as a string."""
+        if len(self.data) < 2:
+            # Return empty chart area
+            return "\n" * (self.size.height - 1) if self.size.height > 1 else ""
+        
+        # Get widget dimensions
+        width = self.size.width
+        height = self.size.height
+        
+        if width < 3 or height < 3:
+            return ""
+        
+        # Fixed axis ranges
+        x_min, x_max = 0.0, self.x_max
+        y_min, y_max = 0.0, 1.0
+        
+        # Calculate scaling factors
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        
+        # Account for borders/padding (leave 1 char on each side)
+        plot_width = width - 2
+        plot_height = height - 2
+        
+        if plot_width <= 0 or plot_height <= 0:
+            return ""
+        
+        # Create a 2D grid for the plot (using spaces as background)
+        grid = [[' ' for _ in range(plot_width)] for _ in range(plot_height)]
+        
+        # Plot the line
+        for i in range(len(self.data) - 1):
+            x1, y1 = self.data[i]
+            x2, y2 = self.data[i + 1]
+            
+            # Convert to pixel coordinates
+            px1 = int(((x1 - x_min) / x_range) * plot_width)
+            py1 = int(((y_max - y1) / y_range) * plot_height)  # Flip y-axis
+            px2 = int(((x2 - x_min) / x_range) * plot_width)
+            py2 = int(((y_max - y2) / y_range) * plot_height)  # Flip y-axis
+            
+            # Clamp to grid bounds
+            px1 = max(0, min(plot_width - 1, px1))
+            py1 = max(0, min(plot_height - 1, py1))
+            px2 = max(0, min(plot_width - 1, px2))
+            py2 = max(0, min(plot_height - 1, py2))
+            
+            # Draw line using Bresenham's algorithm
+            self._draw_line(grid, px1, py1, px2, py2, plot_width, plot_height)
+        
+        # Convert grid to string
+        lines = [''.join(row) for row in grid]
+        return '\n'.join(lines)
+    
+    def _draw_line(self, grid: List[List[str]], x1: int, y1: int, x2: int, y2: int, 
+                   width: int, height: int) -> None:
+        """Draw a line using Bresenham's algorithm."""
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        sx = 1 if x1 < x2 else -1
+        sy = 1 if y1 < y2 else -1
+        err = dx - dy
+        
+        x, y = x1, y1
+        
+        # Character for drawing the line
+        # Using middle dot for a clean, visible line
+        line_char = '·'  # Middle dot for line points
+        
+        while True:
+            if 0 <= x < width and 0 <= y < height:
+                grid[y][x] = line_char
+            
+            if x == x2 and y == y2:
+                break
+            
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+
+
 class ChartsPanel(Vertical):
     """Panel containing price history and BTC price charts."""
     
     def compose(self):
         """Compose the charts panel UI."""
+        from src.config import AppConfig
+        config = AppConfig()
         with Vertical(classes="box", id="price_history_container"):
             yield Label("PROBABILITY HISTORY", classes="chart_label")
-            yield PlotextPlot(id="price_plot")
+            yield ProbabilityChart(id="price_plot", x_max=float(config.market_duration_seconds))
         with Vertical(classes="box", id="btc_history_container"):
             yield Label("BTC PRICE HISTORY", classes="chart_label")
             yield PlotextPlot(id="btc_plot")

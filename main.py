@@ -20,7 +20,7 @@ from textual.binding import Binding
 from connectors.polymarket import PolymarketConnector
 from src.config import AppConfig, CSS
 from src.engine import MarketDataManager, HistoryManager, WebSocketManager, OrderExecutor
-from src.ui import MarketPanel, PricePanel, StatsPanel, ChartsPanel, ResolutionOverlay
+from src.ui import MarketPanel, PricePanel, StatsPanel, ChartsPanel, ResolutionOverlay, ProbabilityChart
 from src.utils import handle_ui_errors
 
 load_dotenv()
@@ -375,33 +375,19 @@ class FingerBlasterApp(App):
                 await self._update_price_chart()
     
     async def _update_price_chart(self) -> None:
-        """Update price history chart."""
+        """Update price history chart using custom widget with fixed x-axis."""
         try:
             history = await self.history_manager.get_yes_history()
             if len(history) < 2:
                 return
             
-            from textual_plotext import PlotextPlot
-            plot = self.query_one("#price_plot", PlotextPlot)
-            plt = plot.plt
-            plt.clf()
-            plt.theme("dark")
+            # Use custom ProbabilityChart widget with fixed x-axis
+            chart = self.query_one("#price_plot", ProbabilityChart)
             
-            x = [p[0] for p in history]
-            y = [p[1] for p in history]
+            # Update with actual data only - no boundary points needed!
+            # The widget handles the fixed x-axis internally
+            chart.update_data(history)
             
-            # Plot ONLY the actual data we have - no boundary points, no filling
-            plt.plot(x, y, color="green")
-            
-            # Set fixed x-axis limits AFTER plotting to ensure they're applied
-            # This ensures the x-axis stays fixed at 0-900 seconds regardless of data range
-            # The line will grow from left to right as time progresses
-            plt.xlim(0, self.config.market_duration_seconds)
-            plt.ylim(0, 1)
-            
-            plt.grid(False, "x")
-            plt.xticks([])
-            plot.refresh()
         except Exception as e:
             logger.debug(f"Error updating price chart: {e}")
     

@@ -154,6 +154,12 @@ PlotextPlot {
     width: 100%;
 }
 
+ProbabilityChart {
+    height: 1fr;
+    width: 100%;
+    color: #00ff00;
+}
+
 #price_history_container {
     height: 1fr;
 }
