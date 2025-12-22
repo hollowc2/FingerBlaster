@@ -6,4 +6,6 @@ websockets
 textual
 textual-plotext
 web3
+PyQt6
+matplotlib
 
