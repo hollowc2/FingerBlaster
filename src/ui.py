@@ -107,21 +107,21 @@ class StatsPanel(Static):
     selected_size = reactive(1.0)
     yes_balance = reactive(0.0)
     no_balance = reactive(0.0)
-    yes_price = reactive(0.0)
-    no_price = reactive(0.0)
+    avg_entry_price_yes = reactive(None)
+    avg_entry_price_no = reactive(None)
     
     def render(self) -> str:
         """Render the stats panel."""
-        # Format YES position with price if there's a position
+        # Format YES position with average entry price if there's a position
         yes_pos_str = f"Y:{self.yes_balance:.1f}"
-        if self.yes_balance > 0 and self.yes_price > 0:
-            yes_price_cents = int(self.yes_price * 100)
+        if self.yes_balance > 0 and self.avg_entry_price_yes is not None:
+            yes_price_cents = int(self.avg_entry_price_yes * 100)
             yes_pos_str += f" @{yes_price_cents}c"
         
-        # Format NO position with price if there's a position
+        # Format NO position with average entry price if there's a position
         no_pos_str = f"N:{self.no_balance:.1f}"
-        if self.no_balance > 0 and self.no_price > 0:
-            no_price_cents = int(self.no_price * 100)
+        if self.no_balance > 0 and self.avg_entry_price_no is not None:
+            no_price_cents = int(self.avg_entry_price_no * 100)
             no_pos_str += f" @{no_price_cents}c"
         
         return f"[b #00ffff]ACCOUNT STATS[/]\n" \

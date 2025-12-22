@@ -192,6 +192,10 @@ class FingerBlasterCore:
         self.last_chart_update: float = 0.0
         self.selected_size: float = 1.0
         
+        # Average entry price tracking (static, only changes when positions change)
+        self.avg_entry_price_yes: Optional[float] = None
+        self.avg_entry_price_no: Optional[float] = None
+        
         # Callback management
         self.callback_manager = CallbackManager()
         
@@ -408,7 +412,16 @@ class FingerBlasterCore:
                 return float(bal or 0.0), float(yes_bal or 0.0), float(no_bal or 0.0)
             
             bal, y, n = await asyncio.to_thread(get_stats)
-            self._emit('account_stats_update', bal, y, n, self.selected_size)
+            
+            # Reset average entry prices if positions are zero
+            if y == 0:
+                self.avg_entry_price_yes = None
+            if n == 0:
+                self.avg_entry_price_no = None
+            
+            # Pass average entry prices to UI
+            self._emit('account_stats_update', bal, y, n, self.selected_size, 
+                      self.avg_entry_price_yes, self.avg_entry_price_no)
         except Exception as e:
             logger.error(f"Error updating account stats: {e}", exc_info=True)
     
@@ -787,10 +800,66 @@ class FingerBlasterCore:
                 self.log_msg("Error: Token map not available")
                 return
             
+            # Get current market price before placing order (for average entry price calculation)
+            # Use best ask for BUY orders (the price we'll pay)
+            prices = await self.market_manager.calculate_mid_price()
+            yes_price, no_price, best_bid, best_ask = prices
+            # For BUY orders, use best ask (the price we pay)
+            if side.upper() == 'YES':
+                entry_price = best_ask if best_ask > 0 else yes_price
+            else:  # NO
+                # For NO, best ask in YES terms = 1 - best_bid in NO terms
+                # Best ask for NO = 1 - best_bid (when buying NO, we pay 1 - best_bid in YES terms)
+                no_best_ask = 1.0 - best_bid if best_bid > 0 else no_price
+                entry_price = no_best_ask
+            
+            # Get current position balances before order
+            y_id = token_map.get('YES')
+            n_id = token_map.get('NO')
+            old_yes_bal = 0.0
+            old_no_bal = 0.0
+            if y_id:
+                old_yes_bal = self.connector.get_token_balance(y_id)
+            if n_id:
+                old_no_bal = self.connector.get_token_balance(n_id)
+            
             resp = await self.order_executor.execute_order(side, size, token_map)
             
             if resp and resp.get('orderID'):
                 self.log_msg(f"Order FILLED: {resp['orderID'][:10]}...")
+                
+                # Update average entry price
+                if side.upper() == 'YES':
+                    # Calculate new average entry price (weighted average)
+                    # For market orders, we estimate shares received: size / entry_price
+                    new_shares = size / entry_price if entry_price > 0 else 0
+                    total_shares = old_yes_bal + new_shares
+                    
+                    if total_shares > 0:
+                        if self.avg_entry_price_yes is not None and old_yes_bal > 0:
+                            # Weighted average: (old_price * old_shares + new_price * new_shares) / total_shares
+                            self.avg_entry_price_yes = (
+                                (self.avg_entry_price_yes * old_yes_bal) + (entry_price * new_shares)
+                            ) / total_shares
+                        else:
+                            # First position or no previous position
+                            self.avg_entry_price_yes = entry_price
+                    else:
+                        self.avg_entry_price_yes = None
+                else:  # NO
+                    new_shares = size / entry_price if entry_price > 0 else 0
+                    total_shares = old_no_bal + new_shares
+                    
+                    if total_shares > 0:
+                        if self.avg_entry_price_no is not None and old_no_bal > 0:
+                            self.avg_entry_price_no = (
+                                (self.avg_entry_price_no * old_no_bal) + (entry_price * new_shares)
+                            ) / total_shares
+                        else:
+                            self.avg_entry_price_no = entry_price
+                    else:
+                        self.avg_entry_price_no = None
+                
                 await self.update_account_stats()
             else:
                 self.log_msg("Order FAILED")
@@ -812,6 +881,10 @@ class FingerBlasterCore:
                 self.log_msg(f"Flatten completed. {len(results)} orders processed.")
             else:
                 self.log_msg("Flatten completed. No orders to process.")
+            
+            # Reset average entry prices after flattening
+            self.avg_entry_price_yes = None
+            self.avg_entry_price_no = None
         except Exception as e:
             self.log_msg(f"Flatten error: {e}")
             logger.error(f"Flatten error: {e}", exc_info=True)

@@ -96,15 +96,11 @@ def run_textual_app():
                 pp.yes_price = yes_price
                 pp.no_price = no_price
                 pp.spread = f"{best_bid:.2f} / {best_ask:.2f}"
-                
-                # Also update prices in stats panel for position display
-                sp = self.query_one("#stats_panel", StatsPanel)
-                sp.yes_price = yes_price
-                sp.no_price = no_price
             except Exception as e:
                 logger.debug(f"Error updating price panel: {e}")
         
-        async def _on_account_stats_update(self, balance: float, yes_balance: float, no_balance: float, size: float) -> None:
+        async def _on_account_stats_update(self, balance: float, yes_balance: float, no_balance: float, size: float, 
+                                          avg_entry_price_yes: Optional[float], avg_entry_price_no: Optional[float]) -> None:
             """Handle account stats update from core."""
             try:
                 sp = self.query_one("#stats_panel", StatsPanel)
@@ -112,6 +108,8 @@ def run_textual_app():
                 sp.yes_balance = yes_balance
                 sp.no_balance = no_balance
                 sp.selected_size = size
+                sp.avg_entry_price_yes = avg_entry_price_yes
+                sp.avg_entry_price_no = avg_entry_price_no
             except Exception as e:
                 logger.debug(f"Error updating stats panel: {e}")
         
