@@ -1,0 +1,9 @@
+py-clob-client
+requests
+pandas
+python-dotenv
+websockets
+textual
+textual-plotext
+web3
+

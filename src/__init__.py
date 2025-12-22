@@ -1,0 +1,2 @@
+"""FingerBlaster application package."""
+
