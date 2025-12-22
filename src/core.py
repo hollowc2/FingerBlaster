@@ -80,8 +80,19 @@ class FingerBlasterCore:
                         loop = asyncio.get_running_loop()
                         loop.create_task(callback(*args, **kwargs))
                     except RuntimeError:
-                        # No running loop, schedule for later
-                        asyncio.create_task(callback(*args, **kwargs))
+                        # No running loop - this can happen in Qt
+                        # Try to get any event loop
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                loop.create_task(callback(*args, **kwargs))
+                            else:
+                                # Loop exists but not running - schedule it
+                                asyncio.ensure_future(callback(*args, **kwargs), loop=loop)
+                        except (RuntimeError, AttributeError):
+                            # No loop available - this will be handled by Qt integration
+                            # Just log a warning, the Qt layer will handle it
+                            logger.debug(f"No event loop available for async callback {event}")
                 else:
                     callback(*args, **kwargs)
             except Exception as e:
@@ -136,6 +147,10 @@ class FingerBlasterCore:
                         strike = str(new_market.get('strike_price', 'N/A'))
                         ends = self._format_ends(new_market.get('end_date', 'N/A'))
                         self._emit('market_update', strike, ends)
+                        
+                        # Reset countdown display when new market loads
+                        # This will be updated by the countdown timer, but we can trigger an immediate update
+                        await self.update_countdown()
                         
                         # Re-check prior outcomes for the new market
                         await self._check_and_add_prior_outcomes()
@@ -194,6 +209,7 @@ class FingerBlasterCore:
         """Update the countdown timer."""
         market = await self.market_manager.get_market()
         if not market:
+            # If no market, show N/A but don't emit to avoid glitching
             return
         
         try:
@@ -207,14 +223,17 @@ class FingerBlasterCore:
             
             now = pd.Timestamp.now(tz='UTC')
             diff = dt_end - now
+            total_seconds = diff.total_seconds()
             
-            if diff.total_seconds() < 0:
+            if total_seconds < 0:
+                # Market has expired - show EXPIRED and keep showing it
                 time_str = "EXPIRED"
             else:
-                secs = int(diff.total_seconds())
+                # Calculate time remaining with seconds precision
+                secs = int(total_seconds)
                 mins = secs // 60
-                re_secs = secs % 60
-                time_str = f"{mins:02d}:{re_secs:02d}"
+                remaining_secs = secs % 60
+                time_str = f"{mins:02d}:{remaining_secs:02d}"
             
             self._emit('countdown_update', time_str)
         except Exception as e:

@@ -117,6 +117,9 @@ class FingerBlasterPyQtApp(QMainWindow):
         self.setGeometry(100, 100, 1400, 900)
         self.setStyleSheet("background-color: #000000; color: white;")
         
+        # Set focus policy so the window can receive key events
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        
         # Central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -263,10 +266,10 @@ class FingerBlasterPyQtApp(QMainWindow):
         self.log_panel.setMinimumHeight(self.log_panel_height)
         self.log_panel.setStyleSheet("background-color: #000000; color: #00ffff; border: 2px solid white;")
         self.log_panel.setReadOnly(True)
-        # Install event filter so key events can be handled by parent window
+        # Prevent log panel from accepting keyboard focus so shortcuts work
+        self.log_panel.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Install event filter only on log panel to prevent it from processing shortcut keys
         self.log_panel.installEventFilter(self)
-        # Also install on central widget and other key widgets
-        central_widget.installEventFilter(self)
         main_layout.addWidget(self.log_panel)
         
         # Resolution overlay (will be resized on show)
@@ -319,77 +322,52 @@ class FingerBlasterPyQtApp(QMainWindow):
         # Store shortcuts as instance variables to prevent garbage collection
         self.shortcuts = []
         
+        # Use ApplicationShortcut context so shortcuts work regardless of which widget has focus
+        shortcut_context = Qt.ShortcutContext.ApplicationShortcut
+        
+        # Helper function to create and configure a shortcut
+        def create_shortcut(key_sequence, callback):
+            shortcut = QShortcut(QKeySequence(key_sequence), self, callback)
+            shortcut.setContext(shortcut_context)
+            shortcut.setEnabled(True)
+            self.shortcuts.append(shortcut)
+            return shortcut
+        
         # Buy YES
-        shortcut = QShortcut(QKeySequence("Y"), self, self.buy_yes)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
-        shortcut = QShortcut(QKeySequence("y"), self, self.buy_yes)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
+        create_shortcut("Y", self.buy_yes)
+        create_shortcut("y", self.buy_yes)
         
         # Buy NO
-        shortcut = QShortcut(QKeySequence("N"), self, self.buy_no)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
-        shortcut = QShortcut(QKeySequence("n"), self, self.buy_no)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
+        create_shortcut("N", self.buy_no)
+        create_shortcut("n", self.buy_no)
         
         # Flatten
-        shortcut = QShortcut(QKeySequence("F"), self, self.flatten)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
-        shortcut = QShortcut(QKeySequence("f"), self, self.flatten)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
+        create_shortcut("F", self.flatten)
+        create_shortcut("f", self.flatten)
         
         # Cancel All
-        shortcut = QShortcut(QKeySequence("C"), self, self.cancel_all)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
-        shortcut = QShortcut(QKeySequence("c"), self, self.cancel_all)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
+        create_shortcut("C", self.cancel_all)
+        create_shortcut("c", self.cancel_all)
         
         # Size up
-        shortcut = QShortcut(QKeySequence("+"), self, self.size_up)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
-        shortcut = QShortcut(QKeySequence("="), self, self.size_up)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
+        create_shortcut("+", self.size_up)
+        create_shortcut("=", self.size_up)
         
         # Size down
-        shortcut = QShortcut(QKeySequence("-"), self, self.size_down)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
-        shortcut = QShortcut(QKeySequence("_"), self, self.size_down)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
+        create_shortcut("-", self.size_down)
+        create_shortcut("_", self.size_down)
         
         # Toggle graphs
-        shortcut = QShortcut(QKeySequence("H"), self, self.toggle_graphs)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
-        shortcut = QShortcut(QKeySequence("h"), self, self.toggle_graphs)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
+        create_shortcut("H", self.toggle_graphs)
+        create_shortcut("h", self.toggle_graphs)
         
         # Toggle log
-        shortcut = QShortcut(QKeySequence("L"), self, self.toggle_log)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
-        shortcut = QShortcut(QKeySequence("l"), self, self.toggle_log)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
+        create_shortcut("L", self.toggle_log)
+        create_shortcut("l", self.toggle_log)
         
         # Quit
-        shortcut = QShortcut(QKeySequence("Q"), self, self.quit_app)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
-        shortcut = QShortcut(QKeySequence("q"), self, self.quit_app)
-        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.shortcuts.append(shortcut)
+        create_shortcut("Q", self.quit_app)
+        create_shortcut("q", self.quit_app)
     
     def keyPressEvent(self, event: QKeyEvent):
         """Handle key press events for keyboard shortcuts."""
@@ -454,6 +432,7 @@ class FingerBlasterPyQtApp(QMainWindow):
     
     async def _on_countdown_update(self, time_str: str):
         """Handle countdown update from core."""
+        # Update immediately on the main thread to avoid glitching
         self.market_panel.update_time_left(time_str)
     
     async def _on_prior_outcomes_update(self, outcomes: list):
@@ -582,21 +561,22 @@ class FingerBlasterPyQtApp(QMainWindow):
         self.close()
     
     def eventFilter(self, obj, event):
-        """Event filter to handle key events from child widgets."""
-        if event.type() == QEvent.Type.KeyPress:
-            key_event = QKeyEvent(event)
-            # Forward key events to the main window's keyPressEvent
-            self.keyPressEvent(key_event)
-            # If it's a shortcut key, don't let the child widget handle it
-            key_char = key_event.text().upper() if key_event.text() else ""
-            key = key_event.key()
+        """Event filter to prevent log panel from consuming shortcut key events."""
+        # Only filter events from the log panel
+        if obj == self.log_panel and event.type() == QEvent.Type.KeyPress:
+            # Check if this is one of our shortcut keys
+            key_char = event.text().upper() if event.text() else ""
+            key = event.key()
             shortcut_keys = [
                 Qt.Key.Key_Y, Qt.Key.Key_N, Qt.Key.Key_F, Qt.Key.Key_C,
                 Qt.Key.Key_Plus, Qt.Key.Key_Equal, Qt.Key.Key_Minus, Qt.Key.Key_Underscore,
                 Qt.Key.Key_H, Qt.Key.Key_L, Qt.Key.Key_Q
             ]
+            # If it's a shortcut key, prevent the log panel from processing it
+            # ApplicationShortcut will handle it at the application level
             if key in shortcut_keys or key_char in ["Y", "N", "F", "C", "+", "=", "-", "_", "H", "L", "Q"]:
-                return True  # Consume the event
+                # Let ApplicationShortcut handle it, but prevent log panel from processing
+                return True  # Consume the event so log panel doesn't process it
         return super().eventFilter(obj, event)
     
     def show_help(self):

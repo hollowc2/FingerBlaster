@@ -91,10 +91,19 @@ class MarketPanel(QFrame):
     
     def update_time_left(self, time_str: str):
         """Update time left."""
+        # Only update if the value actually changed to prevent unnecessary repaints
+        if self.time_left == time_str:
+            return
+        
         self.time_left = time_str
+        
         if time_str == "EXPIRED":
             self.time_label.setStyleSheet("color: #ff0000; font-weight: bold; font-size: 12pt;")
-        elif time_str != "N/A":
+            self.time_label.setText("REMAIN: EXPIRED")
+        elif time_str == "N/A":
+            self.time_label.setStyleSheet("color: #ffff00; font-weight: bold; font-size: 12pt;")
+            self.time_label.setText("REMAIN: N/A")
+        else:
             try:
                 parts = time_str.split(':')
                 if len(parts) == 2:
@@ -103,9 +112,9 @@ class MarketPanel(QFrame):
                         self.time_label.setStyleSheet("color: #ff0000; font-weight: bold; font-size: 12pt;")
                     else:
                         self.time_label.setStyleSheet("color: #ffff00; font-weight: bold; font-size: 12pt;")
+                    self.time_label.setText(f"REMAIN: {time_str}")
             except (ValueError, AttributeError):
-                pass
-        self.time_label.setText(f"REMAIN: {time_str}")
+                self.time_label.setText(f"REMAIN: {time_str}")
     
     def update_prior_outcomes(self, outcomes: str):
         """Update prior outcomes."""
