@@ -141,16 +141,81 @@ class FingerBlasterPyQtApp(QMainWindow):
         self.stats_panel = StatsPanel()
         left_layout.addWidget(self.stats_panel)
         
-        # Help button
+        # Action buttons panel
+        buttons_label = QLabel("ACTIONS")
+        buttons_label.setStyleSheet("font-weight: bold; color: #00ffff; font-size: 12pt; padding: 5px;")
+        left_layout.addWidget(buttons_label)
+        
+        # Create button grid
+        buttons_widget = QWidget()
+        buttons_grid = QVBoxLayout()
+        buttons_widget.setLayout(buttons_grid)
+        
+        # Row 1: Buy buttons
+        row1 = QHBoxLayout()
+        self.buy_yes_btn = QPushButton("Y: BUY YES")
+        self.buy_yes_btn.clicked.connect(self.buy_yes)
+        row1.addWidget(self.buy_yes_btn)
+        
+        self.buy_no_btn = QPushButton("N: BUY NO")
+        self.buy_no_btn.clicked.connect(self.buy_no)
+        row1.addWidget(self.buy_no_btn)
+        buttons_grid.addLayout(row1)
+        
+        # Row 2: Flatten and Cancel
+        row2 = QHBoxLayout()
+        self.flatten_btn = QPushButton("F: FLATTEN")
+        self.flatten_btn.clicked.connect(self.flatten)
+        row2.addWidget(self.flatten_btn)
+        
+        self.cancel_btn = QPushButton("C: CANCEL")
+        self.cancel_btn.clicked.connect(self.cancel_all)
+        row2.addWidget(self.cancel_btn)
+        buttons_grid.addLayout(row2)
+        
+        # Row 3: Size buttons
+        row3 = QHBoxLayout()
+        self.size_up_btn = QPushButton("+: SIZE UP")
+        self.size_up_btn.clicked.connect(self.size_up)
+        row3.addWidget(self.size_up_btn)
+        
+        self.size_down_btn = QPushButton("-: SIZE DOWN")
+        self.size_down_btn.clicked.connect(self.size_down)
+        row3.addWidget(self.size_down_btn)
+        buttons_grid.addLayout(row3)
+        
+        # Row 4: Toggle buttons
+        row4 = QHBoxLayout()
+        self.toggle_graphs_btn = QPushButton("H: TOGGLE GRAPHS")
+        self.toggle_graphs_btn.clicked.connect(self.toggle_graphs)
+        row4.addWidget(self.toggle_graphs_btn)
+        
+        self.toggle_log_btn = QPushButton("L: TOGGLE LOG")
+        self.toggle_log_btn.clicked.connect(self.toggle_log)
+        row4.addWidget(self.toggle_log_btn)
+        buttons_grid.addLayout(row4)
+        
+        # Row 5: Help and Quit
+        row5 = QHBoxLayout()
         self.help_button = QPushButton("? HELP")
-        self.help_button.setStyleSheet("""
+        self.help_button.clicked.connect(self.show_help)
+        row5.addWidget(self.help_button)
+        
+        self.quit_btn = QPushButton("Q: QUIT")
+        self.quit_btn.clicked.connect(self.quit_app)
+        row5.addWidget(self.quit_btn)
+        buttons_grid.addLayout(row5)
+        
+        # Style all buttons
+        button_style = """
             QPushButton {
                 background-color: #1a1a1a;
                 color: #00ffff;
                 border: 1px solid #00ffff;
                 font-weight: bold;
-                font-size: 11pt;
-                padding: 8px;
+                font-size: 10pt;
+                padding: 6px;
+                min-height: 30px;
             }
             QPushButton:hover {
                 background-color: #00ffff;
@@ -159,9 +224,14 @@ class FingerBlasterPyQtApp(QMainWindow):
             QPushButton:pressed {
                 background-color: #00cccc;
             }
-        """)
-        self.help_button.clicked.connect(self.show_help)
-        left_layout.addWidget(self.help_button)
+        """
+        for row in [row1, row2, row3, row4, row5]:
+            for i in range(row.count()):
+                item = row.itemAt(i)
+                if item and item.widget():
+                    item.widget().setStyleSheet(button_style)
+        
+        left_layout.addWidget(buttons_widget)
         
         left_widget.setLayout(left_layout)
         top_splitter.addWidget(left_widget)
