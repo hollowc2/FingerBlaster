@@ -29,9 +29,14 @@ A standalone terminal-based trading interface for Polymarket's "BTC Up or Down 1
 
 ## Usage
 
-Run the application:
+Run the application with the default theme:
 ```bash
-python finger_blaster.py
+python main.py
+```
+
+Run with the purple theme:
+```bash
+python main.py --theme purple
 ```
 
 ## Keyboard Shortcuts

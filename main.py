@@ -7,7 +7,7 @@ import os
 import sys
 import time
 from datetime import datetime
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Union
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -18,9 +18,21 @@ from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
 
 from connectors.polymarket import PolymarketConnector
-from src.config import AppConfig, CSS
+from src.config import AppConfig, CSS, CSS_PURPLE
 from src.engine import MarketDataManager, HistoryManager, WebSocketManager, OrderExecutor
 from src.ui import MarketPanel, PricePanel, StatsPanel, ChartsPanel, ResolutionOverlay, ProbabilityChart
+from src.ui_purple import (
+    MarketPanel as MarketPanelPurple,
+    PricePanel as PricePanelPurple,
+    StatsPanel as StatsPanelPurple,
+    ChartsPanel as ChartsPanelPurple,
+    ResolutionOverlay as ResolutionOverlayPurple
+)
+
+# Type aliases for theme-agnostic panels
+MarketPanelType = Union[MarketPanel, MarketPanelPurple]
+PricePanelType = Union[PricePanel, PricePanelPurple]
+StatsPanelType = Union[StatsPanel, StatsPanelPurple]
 from src.utils import handle_ui_errors
 
 load_dotenv()
@@ -53,11 +65,22 @@ class FingerBlasterApp(App):
         Binding("q", "quit", "Quit", show=True),
     ]
     
-    def __init__(self) -> None:
-        """Initialize the application."""
+    def __init__(self, use_purple_theme: bool = False) -> None:
+        """Initialize the application.
+        
+        Args:
+            use_purple_theme: If True, use the purple theme UI. Defaults to False.
+        """
         super().__init__()
         self.config = AppConfig()
         self.connector = PolymarketConnector()
+        self.use_purple_theme = use_purple_theme
+        
+        # Set CSS based on theme
+        if use_purple_theme:
+            self.CSS = CSS_PURPLE
+        else:
+            self.CSS = CSS
         
         # Initialize managers
         self.market_manager = MarketDataManager(self.config)
@@ -165,19 +188,31 @@ class FingerBlasterApp(App):
         yield Header(show_clock=True)
         with Horizontal(id="main_grid"):
             with Vertical(id="left_cockpit"):
-                yield MarketPanel(id="market_panel", classes="cockpit_widget")
-                yield PricePanel(id="price_panel", classes="cockpit_widget")
-                yield StatsPanel(id="stats_panel", classes="cockpit_widget")
+                if self.use_purple_theme:
+                    yield MarketPanelPurple(id="market_panel", classes="cockpit_widget")
+                    yield PricePanelPurple(id="price_panel", classes="cockpit_widget")
+                    yield StatsPanelPurple(id="stats_panel", classes="cockpit_widget")
+                else:
+                    yield MarketPanel(id="market_panel", classes="cockpit_widget")
+                    yield PricePanel(id="price_panel", classes="cockpit_widget")
+                    yield StatsPanel(id="stats_panel", classes="cockpit_widget")
             
-            yield ChartsPanel(id="charts_panel")
+            if self.use_purple_theme:
+                yield ChartsPanelPurple(id="charts_panel")
+            else:
+                yield ChartsPanel(id="charts_panel")
         
         yield RichLog(id="log_panel", wrap=True, highlight=True, markup=True)
         yield Footer()
-        yield ResolutionOverlay(id="resolution_overlay")
+        if self.use_purple_theme:
+            yield ResolutionOverlayPurple(id="resolution_overlay")
+        else:
+            yield ResolutionOverlay(id="resolution_overlay")
     
     async def on_mount(self) -> None:
         """Initialize application on mount."""
-        self.title = "FINGER BLASTER v2.0 (Cockpit Mode)"
+        theme_name = "Purple Theme" if self.use_purple_theme else "Cockpit Mode"
+        self.title = f"FINGER BLASTER v2.0 ({theme_name})"
         self.log_msg("Ready to Blast. Initializing...")
         
         # Initialize displayed outcomes as empty until we check
@@ -223,7 +258,7 @@ class FingerBlasterApp(App):
     async def _initialize_market_ui(self, market: Dict[str, Any]) -> None:
         """Initialize UI with market data."""
         try:
-            mp = self.query_one("#market_panel", MarketPanel)
+            mp = self.query_one("#market_panel", MarketPanelType)
             mp.strike = str(market.get('strike_price', 'N/A'))
             mp.ends = self._format_ends(market.get('end_date', 'N/A'))
         except Exception as e:
@@ -235,7 +270,7 @@ class FingerBlasterApp(App):
         try:
             price = await asyncio.to_thread(self.connector.get_btc_price)
             if price and isinstance(price, (int, float)) and price > 0:
-                mp = self.query_one("#market_panel", MarketPanel)
+                mp = self.query_one("#market_panel", MarketPanelType)
                 mp.btc_price = float(price)
                 
                 await self.history_manager.add_btc_price(float(price))
@@ -262,7 +297,7 @@ class FingerBlasterApp(App):
             y_min, y_max = min(prices), max(prices)
             
             # Get strike for context
-            mp = self.query_one("#market_panel", MarketPanel)
+            mp = self.query_one("#market_panel", MarketPanelType)
             strike_val = self._parse_strike(mp.strike)
             
             if strike_val is not None:
@@ -272,10 +307,17 @@ class FingerBlasterApp(App):
             spread = y_max - y_min
             padding = spread * self.config.chart_padding_percentage if spread > 0 else 50.0
             
-            plt.plot(prices, color="cyan", label="BTC")
-            if strike_val is not None:
-                plt.plot([0, len(prices)-1], [strike_val, strike_val], 
-                        color="yellow", label="STRIKE")
+            # Use theme-appropriate colors
+            if self.use_purple_theme:
+                plt.plot(prices, color="#9d4edd", label="BTC")
+                if strike_val is not None:
+                    plt.plot([0, len(prices)-1], [strike_val, strike_val], 
+                            color="#e0aaff", label="STRIKE")
+            else:
+                plt.plot(prices, color="cyan", label="BTC")
+                if strike_val is not None:
+                    plt.plot([0, len(prices)-1], [strike_val, strike_val], 
+                            color="yellow", label="STRIKE")
             
             plt.ylim(y_min - padding, y_max + padding)
             plt.grid(False, "x")
@@ -304,7 +346,7 @@ class FingerBlasterApp(App):
                 return float(bal or 0.0), float(yes_bal or 0.0), float(no_bal or 0.0)
             
             bal, y, n = await asyncio.to_thread(get_stats)
-            sp = self.query_one("#stats_panel", StatsPanel)
+            sp = self.query_one("#stats_panel", StatsPanelType)
             sp.balance = bal
             sp.yes_balance = y
             sp.no_balance = n
@@ -338,7 +380,7 @@ class FingerBlasterApp(App):
                 re_secs = secs % 60
                 time_str = f"{mins:02d}:{re_secs:02d}"
             
-            mp = self.query_one("#market_panel", MarketPanel)
+            mp = self.query_one("#market_panel", MarketPanelType)
             mp.time_left = time_str
         except Exception as e:
             logger.debug(f"Error updating countdown: {e}")
@@ -353,7 +395,7 @@ class FingerBlasterApp(App):
         
         # Update UI
         try:
-            pp = self.query_one("#price_panel", PricePanel)
+            pp = self.query_one("#price_panel", PricePanelType)
             pp.yes_price = yes_price
             pp.no_price = no_price
             pp.spread = f"{best_bid:.2f} / {best_ask:.2f}"
@@ -418,7 +460,7 @@ class FingerBlasterApp(App):
     async def _show_resolution_overlay(self) -> None:
         """Show resolution overlay."""
         try:
-            mp = self.query_one("#market_panel", MarketPanel)
+            mp = self.query_one("#market_panel", MarketPanelType)
             btc_price = mp.btc_price
             strike_str = str(mp.strike).replace(',', '').replace('$', '').strip()
             
@@ -505,9 +547,16 @@ class FingerBlasterApp(App):
             
             for outcome in outcomes_to_display:
                 if outcome == "YES":
-                    prior_str += "[green]▲[/]"
+                    # Use theme-appropriate colors
+                    if self.use_purple_theme:
+                        prior_str += "[bold #9d4edd]▲[/]"
+                    else:
+                        prior_str += "[green]▲[/]"
                 elif outcome == "NO":
-                    prior_str += "[red]▼[/]"
+                    if self.use_purple_theme:
+                        prior_str += "[bold #d63384]▼[/]"
+                    else:
+                        prior_str += "[red]▼[/]"
             
             if not prior_str:
                 prior_str = "---"
@@ -585,7 +634,7 @@ class FingerBlasterApp(App):
     def action_size_up(self) -> None:
         """Increase order size."""
         try:
-            sp = self.query_one("#stats_panel", StatsPanel)
+            sp = self.query_one("#stats_panel", StatsPanelType)
             sp.selected_size += self.config.size_increment
             self.log_msg(f"Size increased to ${sp.selected_size:.2f}")
         except Exception as e:
@@ -594,7 +643,7 @@ class FingerBlasterApp(App):
     def action_size_down(self) -> None:
         """Decrease order size."""
         try:
-            sp = self.query_one("#stats_panel", StatsPanel)
+            sp = self.query_one("#stats_panel", StatsPanelType)
             if sp.selected_size > self.config.min_order_size:
                 sp.selected_size -= self.config.size_increment
                 self.log_msg(f"Size decreased to ${sp.selected_size:.2f}")
@@ -612,7 +661,7 @@ class FingerBlasterApp(App):
     async def _place_order(self, side: str) -> None:
         """Place an order."""
         try:
-            sp = self.query_one("#stats_panel", StatsPanel)
+            sp = self.query_one("#stats_panel", StatsPanelType)
             size = sp.selected_size
             self.log_msg(f"Order: [bold]BUY {side}[/] (${size:.2f})")
             
@@ -701,8 +750,21 @@ class FingerBlasterApp(App):
 
 if __name__ == "__main__":
     """Main entry point."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="FingerBlaster Trading Application")
+    parser.add_argument(
+        "--theme",
+        choices=["default", "purple"],
+        default="default",
+        help="UI theme to use (default: default)"
+    )
+    args = parser.parse_args()
+    
+    use_purple = args.theme == "purple"
+    
     try:
-        app = FingerBlasterApp()
+        app = FingerBlasterApp(use_purple_theme=use_purple)
         app.run()
     except KeyboardInterrupt:
         logger.info("Application interrupted by user")
