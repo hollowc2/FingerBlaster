@@ -1,5 +1,7 @@
 # FingerBlaster - Polymarket Trading Interface
 
+![FingerBlaster Icon](icon.png)
+
 A standalone terminal-based trading interface for Polymarket's "BTC Up or Down 15m" markets. Features real-time price updates, live charts, and quick order execution.
 
 ## Features
@@ -32,11 +34,6 @@ Run the application:
 python finger_blaster.py
 ```
 
-Run without charts (compact mode):
-```bash
-python finger_blaster.py --no-graphs
-```
-
 ## Keyboard Shortcuts
 
 - `Y` - Buy YES
@@ -45,6 +42,7 @@ python finger_blaster.py --no-graphs
 - `C` - Cancel all orders
 - `+` or `=` - Increase order size by $1
 - `-` or `_` - Decrease order size by $1
+- `H` - Hide graph
 - `L` - Toggle log panel visibility
 - `Q` - Quit
 
