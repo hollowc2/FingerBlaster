@@ -30,7 +30,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QSplitter, QLabel, QDialog, QScrollArea
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject, pyqtSlot
 from PyQt6.QtGui import QKeySequence, QShortcut, QKeyEvent
 from PyQt6.QtCore import QEvent
 
@@ -118,7 +118,8 @@ class FingerBlasterPyQtApp(QMainWindow):
         self.log_visible = True
         
         # Create signals object for thread-safe updates
-        self.signals = UIUpdateSignals()
+        # Parent it to self so it lives with the window
+        self.signals = UIUpdateSignals(self)
         
         self.init_ui()
         self._setup_signal_connections()  # Connect signals after UI is created
@@ -126,8 +127,36 @@ class FingerBlasterPyQtApp(QMainWindow):
         self.setup_timers()
         self.setup_shortcuts()
         
+        # Send initial log message to verify callbacks work
+        self.core.log_msg("Ready to Blast. Initializing...")
+        
+        # Trigger initial chart updates after a delay to ensure data is available
+        def trigger_initial_updates():
+            run_async_task(self._force_chart_updates())
+        QTimer.singleShot(5000, trigger_initial_updates)
+        
         # Check prior outcomes after a delay
         QTimer.singleShot(3000, lambda: run_async_task(self.core._check_and_add_prior_outcomes()))
+    
+    async def _force_chart_updates(self):
+        """Force chart updates to ensure they display initial data."""
+        try:
+            # Force probability chart update
+            history = await self.core.history_manager.get_yes_history()
+            if len(history) >= 2:
+                self.core._emit('chart_update', history)
+            
+            # Force BTC chart update
+            prices = await self.core.history_manager.get_btc_history()
+            if len(prices) >= 2:
+                market = await self.core.market_manager.get_market()
+                strike_val = None
+                if market:
+                    strike_str = str(market.get('strike_price', ''))
+                    strike_val = self.core._parse_strike(strike_str)
+                self.core._emit('chart_update', prices, strike_val, 'btc')
+        except Exception as e:
+            logger.error(f"Error forcing chart updates: {e}", exc_info=True)
     
     def _connect_signals(self):
         """Connect signals to UI update methods."""
@@ -442,16 +471,18 @@ class FingerBlasterPyQtApp(QMainWindow):
     
     def _setup_signal_connections(self):
         """Setup signal connections after UI is initialized."""
-        self.signals.market_strike.connect(self.market_panel.update_strike)
-        self.signals.market_ends.connect(self.market_panel.update_ends)
-        self.signals.btc_price.connect(self.market_panel.update_btc_price)
-        self.signals.prices.connect(self.price_panel.update_prices)
-        self.signals.account_stats.connect(self.stats_panel.update_stats)
-        self.signals.countdown.connect(self.market_panel.update_time_left)
-        self.signals.prior_outcomes.connect(self.market_panel.update_prior_outcomes)
-        self.signals.resolution_show.connect(self._show_resolution_slot)
-        self.signals.resolution_hide.connect(self.resolution_overlay.hide_resolution)
-        self.signals.log_message.connect(self._update_log_slot)
+        # Use QueuedConnection for thread safety (default is AutoConnection which should work, but explicit is better)
+        connection_type = Qt.ConnectionType.QueuedConnection
+        self.signals.market_strike.connect(self.market_panel.update_strike, connection_type)
+        self.signals.market_ends.connect(self.market_panel.update_ends, connection_type)
+        self.signals.btc_price.connect(self.market_panel.update_btc_price, connection_type)
+        self.signals.prices.connect(self.price_panel.update_prices, connection_type)
+        self.signals.account_stats.connect(self.stats_panel.update_stats, connection_type)
+        self.signals.countdown.connect(self.market_panel.update_time_left, connection_type)
+        self.signals.prior_outcomes.connect(self.market_panel.update_prior_outcomes, connection_type)
+        self.signals.resolution_show.connect(self._show_resolution_slot, connection_type)
+        self.signals.resolution_hide.connect(self.resolution_overlay.hide_resolution, connection_type)
+        self.signals.log_message.connect(self._update_log_slot, connection_type)
     
     def _show_resolution_slot(self, resolution: str):
         """Show resolution overlay slot."""
@@ -527,22 +558,57 @@ class FingerBlasterPyQtApp(QMainWindow):
         if not self.graphs_visible:
             return
         
-        # For chart updates, use QTimer to schedule on main thread
-        # We can't easily use signals for complex data structures
-        def update_chart():
-            try:
-                if len(args) == 3 and args[2] == 'btc':
-                    # BTC chart update
-                    prices, strike_val, _ = args
-                    self.btc_chart.update_data(prices, strike_val)
-                else:
-                    # Price chart update
-                    history = args[0]
-                    self.probability_chart.update_data(history)
-            except Exception as e:
-                logger.debug(f"Error updating chart: {e}")
-        # Use QTimer which is thread-safe when called from any thread
-        QTimer.singleShot(0, update_chart)
+        # For chart updates, store data and use invokeMethod to ensure main thread execution
+        # We can't easily use signals for complex data structures, so we store them as instance variables
+        try:
+            if len(args) == 3 and args[2] == 'btc':
+                # BTC chart update - store data and invoke update method
+                import copy
+                self._pending_btc_data = (copy.deepcopy(args[0]) if args[0] else [], args[1])
+                # Use invokeMethod to ensure main thread execution
+                QMetaObject.invokeMethod(
+                    self, "_update_btc_chart_slot",
+                    Qt.ConnectionType.QueuedConnection
+                )
+            elif len(args) >= 1:
+                # Price chart update - store data and invoke update method
+                import copy
+                self._pending_probability_data = copy.deepcopy(args[0]) if args[0] else []
+                # Use invokeMethod to ensure main thread execution
+                QMetaObject.invokeMethod(
+                    self, "_update_probability_chart_slot",
+                    Qt.ConnectionType.QueuedConnection
+                )
+            else:
+                logger.warning(f"Chart update: unexpected args length: {len(args)}")
+        except Exception as e:
+            logger.error(f"Error in chart update handler: {e}", exc_info=True)
+    
+    @pyqtSlot()
+    def _update_btc_chart_slot(self):
+        """Update BTC chart on main thread."""
+        try:
+            if not hasattr(self, '_pending_btc_data'):
+                return
+            prices, strike_val = self._pending_btc_data
+            if len(prices) >= 2:
+                self.btc_chart.update_data(prices, strike_val)
+            delattr(self, '_pending_btc_data')
+        except Exception as e:
+            logger.error(f"Error updating BTC chart: {e}", exc_info=True)
+    
+    @pyqtSlot()
+    def _update_probability_chart_slot(self):
+        """Update probability chart on main thread."""
+        try:
+            if not hasattr(self, '_pending_probability_data'):
+                return
+            history = self._pending_probability_data
+            if len(history) >= 2:
+                self.probability_chart.update_data(history)
+            delattr(self, '_pending_probability_data')
+        except Exception as e:
+            logger.error(f"Error updating probability chart: {e}", exc_info=True)
     
     # Action handlers
     def buy_yes(self):
