@@ -447,7 +447,10 @@ class FingerBlasterPyQtApp(QMainWindow):
     
     async def _on_account_stats_update(self, balance: float, yes_balance: float, no_balance: float, size: float):
         """Handle account stats update from core."""
-        self.stats_panel.update_stats(balance, yes_balance, no_balance, size)
+        # Always use the current selected_size from core to ensure accuracy
+        # This prevents race conditions where async update might have stale data
+        current_size = self.core.selected_size
+        self.stats_panel.update_stats(balance, yes_balance, no_balance, current_size)
     
     async def _on_countdown_update(self, time_str: str):
         """Handle countdown update from core."""
@@ -529,13 +532,25 @@ class FingerBlasterPyQtApp(QMainWindow):
     def size_up(self):
         """Increase order size."""
         self.core.size_up()
-        # Immediately update UI to reflect size change
+        # Immediately update UI size display using the exact value that will be used for orders
+        # This ensures the displayed size always matches what will be submitted
+        current_size = self.core.selected_size
+        self.stats_panel.update_size_only(current_size)
+        # Update full stats in background (for balance, positions, etc.)
+        # Note: The async update will also set size, but it uses self.core.selected_size
+        # which is the source of truth, so it will match what we just displayed
         run_async_task(self.core.update_account_stats())
     
     def size_down(self):
         """Decrease order size."""
         self.core.size_down()
-        # Immediately update UI to reflect size change
+        # Immediately update UI size display using the exact value that will be used for orders
+        # This ensures the displayed size always matches what will be submitted
+        current_size = self.core.selected_size
+        self.stats_panel.update_size_only(current_size)
+        # Update full stats in background (for balance, positions, etc.)
+        # Note: The async update will also set size, but it uses self.core.selected_size
+        # which is the source of truth, so it will match what we just displayed
         run_async_task(self.core.update_account_stats())
     
     def toggle_graphs(self):

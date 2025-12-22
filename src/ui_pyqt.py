@@ -220,6 +220,10 @@ class StatsPanel(QFrame):
         self.balance_label.setText(f"CASH: ${balance:.2f}")
         self.size_label.setText(f"SIZE: ${size:.2f}")
         self.pos_label.setText(f"POS: Y:{yes_balance:.1f} | N:{no_balance:.1f}")
+    
+    def update_size_only(self, size: float):
+        """Update only the size display immediately."""
+        self.size_label.setText(f"SIZE: ${size:.2f}")
 
 
 class ProbabilityChart(QWidget):
