@@ -72,13 +72,93 @@ class FingerBlasterApp(App):
         # UI state
         self.resolution_shown = False
         self.last_resolution: Optional[str] = None
-        self.prior_outcomes: List[str] = []
+        self.prior_outcomes: List[Dict[str, Any]] = []
+        self.displayed_prior_outcomes: List[str] = []  # Filtered consecutive outcomes to display
         self.last_chart_update: float = 0.0
         self.graphs_visible: bool = True
         self.log_visible: bool = True
         
         # Load prior outcomes
         self._load_prior_outcomes()
+    
+    async def _check_and_add_prior_outcomes(self) -> None:
+        """Check if prior outcomes should be displayed based on consecutive market timing."""
+        try:
+            market = await self.market_manager.get_market()
+            if not market or not self.prior_outcomes:
+                self.displayed_prior_outcomes = []
+                self._update_prior_outcomes_display()
+                return
+            
+            # Get current market start time
+            market_start_time = await self.market_manager.get_market_start_time()
+            if not market_start_time:
+                self.displayed_prior_outcomes = []
+                self._update_prior_outcomes_display()
+                return
+            
+            # Calculate what the immediately preceding market's end time should be
+            # (current market start - market duration)
+            expected_previous_market_end = market_start_time - pd.Timedelta(
+                minutes=self.config.market_duration_minutes
+            )
+            
+            # Tolerance for time matching (1 minute to account for slight variations)
+            tolerance_seconds = 60
+            
+            # Filter outcomes to only include consecutive ones
+            consecutive_outcomes = []
+            
+            # Work backwards through prior_outcomes to find consecutive markets
+            # Start by checking if the last outcome matches the immediately preceding market
+            expected_end_time = expected_previous_market_end
+            
+            # Iterate backwards through prior_outcomes
+            for outcome_entry in reversed(self.prior_outcomes):
+                if isinstance(outcome_entry, str):
+                    # Legacy format - can't check time, stop here
+                    break
+                
+                timestamp_str = outcome_entry.get('timestamp')
+                if not timestamp_str:
+                    # No timestamp available, stop here
+                    break
+                
+                try:
+                    outcome_timestamp = pd.Timestamp(timestamp_str)
+                    if outcome_timestamp.tz is None:
+                        outcome_timestamp = outcome_timestamp.tz_localize('UTC')
+                    
+                    # Check if this outcome's timestamp matches the expected end time
+                    time_diff = abs((outcome_timestamp - expected_end_time).total_seconds())
+                    
+                    if time_diff <= tolerance_seconds:
+                        # This outcome matches! Add it to the consecutive list
+                        consecutive_outcomes.insert(0, outcome_entry.get('outcome', ''))
+                        
+                        # Calculate the expected end time for the next market going backwards
+                        expected_end_time = outcome_timestamp - pd.Timedelta(
+                            minutes=self.config.market_duration_minutes
+                        )
+                    else:
+                        # Time doesn't match - we've found a gap, stop here
+                        break
+                        
+                except Exception as e:
+                    logger.debug(f"Error processing outcome timestamp: {e}")
+                    break
+            
+            # Update displayed outcomes
+            self.displayed_prior_outcomes = consecutive_outcomes
+            self._update_prior_outcomes_display()
+            
+            if consecutive_outcomes:
+                self.log_msg(f"Displaying {len(consecutive_outcomes)} consecutive prior outcome(s)")
+                    
+        except Exception as e:
+            logger.debug(f"Error in _check_and_add_prior_outcomes: {e}")
+            self.displayed_prior_outcomes = []
+            self._update_prior_outcomes_display()
     
     def compose(self):
         """Compose the application UI."""
@@ -100,7 +180,12 @@ class FingerBlasterApp(App):
         self.title = "FINGER BLASTER v2.0 (Cockpit Mode)"
         self.log_msg("Ready to Blast. Initializing...")
         
+        # Initialize displayed outcomes as empty until we check
+        self.displayed_prior_outcomes = []
         self._update_prior_outcomes_display()
+        
+        # Check and add prior outcomes if app was off (after a delay to let market initialize)
+        self.set_timer(3.0, lambda: asyncio.create_task(self._check_and_add_prior_outcomes()))
         
         # Start update intervals
         self.set_interval(self.config.market_status_interval, self.update_market_status)
@@ -128,6 +213,8 @@ class FingerBlasterApp(App):
                         await self._initialize_market_ui(new_market)
                         self.log_msg(f"Market Found: {new_market.get('strike_price', 'N/A')}")
                         await self.ws_manager.start()
+                        # Re-check prior outcomes for the new market
+                        await self._check_and_add_prior_outcomes()
             except Exception as e:
                 logger.error(f"Error searching for market: {e}")
         
@@ -372,7 +459,9 @@ class FingerBlasterApp(App):
             overlay.hide()
             
             if self.last_resolution:
-                self._add_prior_outcome(self.last_resolution)
+                # Get market before clearing it
+                market = await self.market_manager.get_market()
+                await self._add_prior_outcome(self.last_resolution, market)
                 self.last_resolution = None
             
             self.log_msg("Clearing expired market...")
@@ -383,11 +472,33 @@ class FingerBlasterApp(App):
         except Exception as e:
             logger.error(f"Error resetting market: {e}")
     
-    def _add_prior_outcome(self, outcome: str) -> None:
-        """Add outcome to prior outcomes list."""
+    async def _add_prior_outcome(self, outcome: str, market: Optional[Dict[str, Any]] = None) -> None:
+        """Add outcome to prior outcomes list with timestamp."""
         outcome_upper = outcome.upper()
         if outcome_upper in ("YES", "NO"):
-            self.prior_outcomes.append(outcome_upper)
+            # Get the current market's end date as timestamp
+            if market is None:
+                market = await self.market_manager.get_market()
+            
+            timestamp = None
+            if market and market.get('end_date'):
+                try:
+                    end_dt = pd.Timestamp(market.get('end_date'))
+                    if end_dt.tz is None:
+                        end_dt = end_dt.tz_localize('UTC')
+                    timestamp = end_dt.isoformat()
+                except Exception as e:
+                    logger.debug(f"Error getting timestamp for outcome: {e}")
+            
+            # If we couldn't get timestamp, use current time
+            if not timestamp:
+                timestamp = pd.Timestamp.now(tz='UTC').isoformat()
+            
+            outcome_entry = {
+                'outcome': outcome_upper,
+                'timestamp': timestamp
+            }
+            self.prior_outcomes.append(outcome_entry)
             if len(self.prior_outcomes) > self.config.max_prior_outcomes:
                 self.prior_outcomes.pop(0)
             self._save_prior_outcomes()
@@ -398,7 +509,15 @@ class FingerBlasterApp(App):
         try:
             mp = self.query_one("#market_panel", MarketPanel)
             prior_str = ""
-            for outcome in self.prior_outcomes:
+            
+            # Use displayed_prior_outcomes (filtered consecutive outcomes) if available,
+            # otherwise fall back to all prior_outcomes for backwards compatibility
+            outcomes_to_display = self.displayed_prior_outcomes if self.displayed_prior_outcomes else [
+                (outcome_entry if isinstance(outcome_entry, str) else outcome_entry.get('outcome', ''))
+                for outcome_entry in self.prior_outcomes
+            ]
+            
+            for outcome in outcomes_to_display:
                 if outcome == "YES":
                     prior_str += "[green]▲[/]"
                 elif outcome == "NO":
@@ -417,7 +536,21 @@ class FingerBlasterApp(App):
             if os.path.exists(self.config.prior_outcomes_file):
                 with open(self.config.prior_outcomes_file, 'r') as f:
                     data = json.load(f)
-                    self.prior_outcomes = data.get('outcomes', [])[:self.config.max_prior_outcomes]
+                    outcomes = data.get('outcomes', [])
+                    
+                    # Handle legacy format (list of strings) or new format (list of dicts)
+                    normalized_outcomes = []
+                    for outcome in outcomes:
+                        if isinstance(outcome, str):
+                            # Legacy format - convert to new format
+                            normalized_outcomes.append({
+                                'outcome': outcome,
+                                'timestamp': None  # Unknown timestamp for legacy data
+                            })
+                        elif isinstance(outcome, dict):
+                            normalized_outcomes.append(outcome)
+                    
+                    self.prior_outcomes = normalized_outcomes[:self.config.max_prior_outcomes]
         except Exception as e:
             logger.debug(f"Error loading prior outcomes: {e}")
             self.prior_outcomes = []
