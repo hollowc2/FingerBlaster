@@ -28,9 +28,9 @@ class MarketPanel(Static):
                f"STRIKE: [yellow]{self.strike}[/]\n" \
                f"ENDS  : [yellow]{self.ends}[/]\n" \
                f"BTC   : [green]${self.btc_price:,.2f}[/]\n" \
+               f"PRIOR : {self.prior_outcomes}\n" \
                f"{delta_str}\n" \
-               f"LEFT  : {time_left_str}\n" \
-               f"PRIOR : {self.prior_outcomes}"
+               f"REMAIN: {time_left_str}"
     
     def _calculate_delta(self) -> str:
         """Calculate and format delta."""
@@ -39,9 +39,9 @@ class MarketPanel(Static):
             diff = self.btc_price - strike_val
             symbol = "▲" if diff >= 0 else "▼"
             color = "green" if diff >= 0 else "red"
-            return f"DELTA: [{color}]{symbol} ${abs(diff):,.2f}[/]"
+            return f"DELTA : [{color}]{symbol} ${abs(diff):,.2f}[/]"
         except (ValueError, AttributeError, TypeError):
-            return "DELTA: N/A"
+            return "DELTA : N/A"
     
     def _format_time_left(self) -> str:
         """Format time left with color coding."""
