@@ -26,7 +26,7 @@ def run_textual_app():
     from textual.containers import Horizontal, Vertical
     from textual.binding import Binding
     
-    from src.config import AppConfig, CSS
+    from src.config import AppConfig, CSS as CSS_STYLES
     from src.core import FingerBlasterCore
     from src.ui import MarketPanel, PricePanel, StatsPanel, ChartsPanel, ResolutionOverlay, ProbabilityChart
     from src.utils import handle_ui_errors
@@ -34,7 +34,7 @@ def run_textual_app():
     class FingerBlasterApp(App):
         """Main application class using Textual UI with shared core."""
         
-        CSS = CSS
+        CSS = CSS_STYLES
         
         BINDINGS = [
             Binding("y", "buy_yes", "Buy YES", show=True),
@@ -96,6 +96,11 @@ def run_textual_app():
                 pp.yes_price = yes_price
                 pp.no_price = no_price
                 pp.spread = f"{best_bid:.2f} / {best_ask:.2f}"
+                
+                # Also update prices in stats panel for position display
+                sp = self.query_one("#stats_panel", StatsPanel)
+                sp.yes_price = yes_price
+                sp.no_price = no_price
             except Exception as e:
                 logger.debug(f"Error updating price panel: {e}")
         

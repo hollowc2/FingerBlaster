@@ -107,13 +107,27 @@ class StatsPanel(Static):
     selected_size = reactive(1.0)
     yes_balance = reactive(0.0)
     no_balance = reactive(0.0)
+    yes_price = reactive(0.0)
+    no_price = reactive(0.0)
     
     def render(self) -> str:
         """Render the stats panel."""
+        # Format YES position with price if there's a position
+        yes_pos_str = f"Y:{self.yes_balance:.1f}"
+        if self.yes_balance > 0 and self.yes_price > 0:
+            yes_price_cents = int(self.yes_price * 100)
+            yes_pos_str += f" @{yes_price_cents}c"
+        
+        # Format NO position with price if there's a position
+        no_pos_str = f"N:{self.no_balance:.1f}"
+        if self.no_balance > 0 and self.no_price > 0:
+            no_price_cents = int(self.no_price * 100)
+            no_pos_str += f" @{no_price_cents}c"
+        
         return f"[b #00ffff]ACCOUNT STATS[/]\n" \
                f"CASH : [bold #00ff00]${self.balance:.2f}[/]\n" \
                f"SIZE : [bold #ffff00]${self.selected_size:.2f}[/]\n" \
-               f"POS  : [green]Y:{self.yes_balance:.1f}[/] | [red]N:{self.no_balance:.1f}[/]"
+               f"POS  : [green]{yes_pos_str}[/] | [red]{no_pos_str}[/]"
 
 
 class ProbabilityChart(Static):
@@ -168,10 +182,17 @@ class ProbabilityChart(Static):
         
         # Draw y-axis labels (0.0 to 1.0 in 0.1 increments)
         y_ticks = [round(i * 0.1, 1) for i in range(11)]  # 0.0, 0.1, ..., 1.0
-        for y_val in y_ticks:
-            # Calculate y position in plot coordinates (flipped: 1.0 at top, 0.0 at bottom)
-            # Use (plot_height - 1) to map to the actual grid positions
-            plot_y = int(((y_max - y_val) / (y_max - y_min)) * (plot_height - 1))
+        num_ticks = len(y_ticks)
+        
+        for idx, y_val in enumerate(y_ticks):
+            # Calculate y position evenly distributed across plot height
+            # Map index to position: 0 -> top (plot_height-1), last -> bottom (0)
+            # Use exact division to ensure even spacing
+            if num_ticks > 1:
+                plot_y = int((num_ticks - 1 - idx) / (num_ticks - 1) * (plot_height - 1))
+            else:
+                plot_y = plot_height // 2
+            
             # Ensure within bounds
             plot_y = max(0, min(plot_height - 1, plot_y))
             grid_y = plot_y
