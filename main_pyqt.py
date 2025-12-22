@@ -409,31 +409,36 @@ class FingerBlasterPyQtApp(QMainWindow):
             super().keyPressEvent(event)
     
     # Callback handlers (wrapped to handle async callbacks)
+    # All UI updates are scheduled on the main thread using QTimer.singleShot
     async def _on_market_update(self, strike: str, ends: str):
         """Handle market update from core."""
-        self.market_panel.update_strike(strike)
-        self.market_panel.update_ends(ends)
+        # Schedule UI update on main thread
+        QTimer.singleShot(0, lambda: self.market_panel.update_strike(strike))
+        QTimer.singleShot(0, lambda: self.market_panel.update_ends(ends))
     
     async def _on_btc_price_update(self, price: float):
         """Handle BTC price update from core."""
-        self.market_panel.update_btc_price(price)
+        # Schedule UI update on main thread
+        QTimer.singleShot(0, lambda: self.market_panel.update_btc_price(price))
     
     async def _on_price_update(self, yes_price: float, no_price: float, best_bid: float, best_ask: float):
         """Handle price update from core."""
+        # Schedule UI update on main thread
         spread = f"{best_bid:.2f} / {best_ask:.2f}"
-        self.price_panel.update_prices(yes_price, no_price, spread)
+        QTimer.singleShot(0, lambda: self.price_panel.update_prices(yes_price, no_price, spread))
     
     async def _on_account_stats_update(self, balance: float, yes_balance: float, no_balance: float, size: float):
         """Handle account stats update from core."""
         # Always use the current selected_size from core to ensure accuracy
         # This prevents race conditions where async update might have stale data
         current_size = self.core.selected_size
-        self.stats_panel.update_stats(balance, yes_balance, no_balance, current_size)
+        # Schedule UI update on main thread
+        QTimer.singleShot(0, lambda: self.stats_panel.update_stats(balance, yes_balance, no_balance, current_size))
     
     async def _on_countdown_update(self, time_str: str):
         """Handle countdown update from core."""
-        # Update immediately on the main thread to avoid glitching
-        self.market_panel.update_time_left(time_str)
+        # Schedule UI update on main thread to avoid glitching
+        QTimer.singleShot(0, lambda: self.market_panel.update_time_left(time_str))
     
     async def _on_prior_outcomes_update(self, outcomes: list):
         """Handle prior outcomes update from core."""
@@ -445,21 +450,26 @@ class FingerBlasterPyQtApp(QMainWindow):
                 outcome_str += "▼"
         if not outcome_str:
             outcome_str = "---"
-        self.market_panel.update_prior_outcomes(outcome_str)
+        # Schedule UI update on main thread
+        QTimer.singleShot(0, lambda: self.market_panel.update_prior_outcomes(outcome_str))
     
     async def _on_resolution(self, resolution: Optional[str]):
         """Handle resolution from core."""
         if resolution:
-            # Resize overlay to cover entire window
-            self.resolution_overlay.setGeometry(self.geometry())
-            self.resolution_overlay.show_resolution(resolution)
-            # Hide after duration
-            QTimer.singleShot(
-                int(self.config.resolution_overlay_duration * 1000),
-                self.resolution_overlay.hide_resolution
-            )
+            # Schedule UI update on main thread
+            def show_resolution():
+                # Resize overlay to cover entire window
+                self.resolution_overlay.setGeometry(self.geometry())
+                self.resolution_overlay.show_resolution(resolution)
+                # Hide after duration
+                QTimer.singleShot(
+                    int(self.config.resolution_overlay_duration * 1000),
+                    self.resolution_overlay.hide_resolution
+                )
+            QTimer.singleShot(0, show_resolution)
         else:
-            self.resolution_overlay.hide_resolution()
+            # Schedule UI update on main thread
+            QTimer.singleShot(0, self.resolution_overlay.hide_resolution)
     
     def resizeEvent(self, event):
         """Handle window resize - update overlay size."""
@@ -469,27 +479,33 @@ class FingerBlasterPyQtApp(QMainWindow):
     
     def _on_log(self, message: str):
         """Handle log message from core."""
-        self.log_panel.append(message)
-        # Auto-scroll to bottom
-        scrollbar = self.log_panel.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        # Schedule UI update on main thread
+        def update_log():
+            self.log_panel.append(message)
+            # Auto-scroll to bottom
+            scrollbar = self.log_panel.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+        QTimer.singleShot(0, update_log)
     
     async def _on_chart_update(self, *args):
         """Handle chart update from core."""
         if not self.graphs_visible:
             return
         
-        try:
-            if len(args) == 3 and args[2] == 'btc':
-                # BTC chart update
-                prices, strike_val, _ = args
-                self.btc_chart.update_data(prices, strike_val)
-            else:
-                # Price chart update
-                history = args[0]
-                self.probability_chart.update_data(history)
-        except Exception as e:
-            logger.debug(f"Error updating chart: {e}")
+        # Schedule UI update on main thread
+        def update_chart():
+            try:
+                if len(args) == 3 and args[2] == 'btc':
+                    # BTC chart update
+                    prices, strike_val, _ = args
+                    self.btc_chart.update_data(prices, strike_val)
+                else:
+                    # Price chart update
+                    history = args[0]
+                    self.probability_chart.update_data(history)
+            except Exception as e:
+                logger.debug(f"Error updating chart: {e}")
+        QTimer.singleShot(0, update_chart)
     
     # Action handlers
     def buy_yes(self):
