@@ -7,7 +7,9 @@ from dataclasses import dataclass
 class AppConfig:
     """Application configuration constants."""
     # History limits
-    max_history_size: int = 1000
+    # Set high enough to never lose data during a 15-minute market
+    # (900 seconds * 10 updates/sec = 9000 max, but we'll use 10000 for safety)
+    max_history_size: int = 10000
     max_btc_history_size: int = 100
     
     # Trading limits

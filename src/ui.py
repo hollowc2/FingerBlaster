@@ -126,11 +126,15 @@ class ProbabilityChart(Static):
     
     def update_data(self, data: List[Tuple[float, float]]) -> None:
         """Update the chart data and refresh."""
-        self.data = data
+        # Filter to only include data within the fixed x-axis range (0 to x_max)
+        # Sort by x (time) to ensure chronological order
+        # This prevents the tail from disappearing and ensures proper rendering
+        filtered = [(x, y) for x, y in data if 0 <= x <= self.x_max]
+        self.data = sorted(filtered, key=lambda p: p[0])
         self.refresh()
     
     def render(self) -> str:
-        """Render the chart as a string."""
+        """Render the chart as a string with axes."""
         if len(self.data) < 2:
             # Return empty chart area
             return "\n" * (self.size.height - 1) if self.size.height > 1 else ""
@@ -139,46 +143,119 @@ class ProbabilityChart(Static):
         width = self.size.width
         height = self.size.height
         
-        if width < 3 or height < 3:
+        # Need enough space for y-axis labels, x-axis labels, and plot area
+        if width < 10 or height < 6:
             return ""
         
-        # Fixed axis ranges
+        # Fixed axis ranges - ALWAYS 0 to x_max (900 seconds)
         x_min, x_max = 0.0, self.x_max
         y_min, y_max = 0.0, 1.0
         
-        # Calculate scaling factors
-        x_range = x_max - x_min
-        y_range = y_max - y_min
+        # Reserve space for y-axis labels (5 chars: "1.0 " + 1 space)
+        y_label_width = 5
+        # Reserve space for x-axis (1 row for line + 1 row for labels)
+        x_axis_height = 2
         
-        # Account for borders/padding (leave 1 char on each side)
-        plot_width = width - 2
-        plot_height = height - 2
+        # Calculate plot area dimensions
+        plot_width = width - y_label_width - 1  # -1 for y-axis line
+        plot_height = height - x_axis_height  # Exclude x-axis space
         
         if plot_width <= 0 or plot_height <= 0:
             return ""
         
-        # Create a 2D grid for the plot (using spaces as background)
-        grid = [[' ' for _ in range(plot_width)] for _ in range(plot_height)]
+        # Create a 2D grid for the entire widget (including labels and axes)
+        grid = [[' ' for _ in range(width)] for _ in range(height)]
         
-        # Plot the line
+        # Draw y-axis labels (0.0 to 1.0 in 0.1 increments)
+        y_ticks = [round(i * 0.1, 1) for i in range(11)]  # 0.0, 0.1, ..., 1.0
+        for y_val in y_ticks:
+            # Calculate y position in plot coordinates (flipped: 1.0 at top, 0.0 at bottom)
+            # Use (plot_height - 1) to map to the actual grid positions
+            plot_y = int(((y_max - y_val) / (y_max - y_min)) * (plot_height - 1))
+            # Ensure within bounds
+            plot_y = max(0, min(plot_height - 1, plot_y))
+            grid_y = plot_y
+            
+            # Format label (e.g., "1.0", "0.5", "0.0")
+            label = f"{y_val:.1f}"
+            # Right-align label in the y-axis space (leave 1 char for spacing)
+            label_start = y_label_width - len(label) - 1
+            for i, char in enumerate(label):
+                if label_start + i >= 0 and label_start + i < y_label_width:
+                    grid[grid_y][label_start + i] = char
+        
+        # Draw y-axis line (vertical line at x = y_label_width)
+        y_axis_x = y_label_width
+        for y in range(plot_height):
+            grid[y][y_axis_x] = '│'  # Vertical line character
+        
+        # Draw x-axis line (horizontal line at bottom of plot area)
+        x_axis_y = plot_height
+        for x in range(y_label_width + 1, width):
+            grid[x_axis_y][x] = '─'  # Horizontal line character
+        
+        # Draw corner where axes meet
+        grid[x_axis_y][y_axis_x] = '└'  # Bottom-left corner
+        
+        # Draw x-axis labels (1-15 minutes)
+        # Convert minutes to seconds for positioning
+        x_ticks_minutes = list(range(1, 16))  # 1, 2, 3, ..., 15
+        label_y = x_axis_y + 1  # Row below the axis line
+        
+        if label_y < height:
+            for minute in x_ticks_minutes:
+                # Convert minute to seconds
+                seconds = minute * 60
+                # Calculate x position in plot coordinates
+                plot_x = int(((seconds - x_min) / (x_max - x_min)) * (plot_width - 1))
+                # Convert to grid column (account for y-axis space)
+                grid_x = y_label_width + 1 + plot_x
+                
+                # Ensure within bounds
+                if grid_x < y_label_width + 1 or grid_x >= width:
+                    continue
+                
+                # Format label (e.g., "1", "2", "15")
+                label = str(minute)
+                # Center the label under the tick position
+                label_start = grid_x - len(label) // 2
+                
+                # Draw label, ensuring it stays within plot area bounds
+                for i, char in enumerate(label):
+                    label_x = label_start + i
+                    # Only draw if within the plot area (after y-axis)
+                    if label_x >= y_label_width + 1 and label_x < width:
+                        grid[label_y][label_x] = char
+        
+        # Create plot grid for the data (excluding axis labels)
+        plot_grid = [[' ' for _ in range(plot_width)] for _ in range(plot_height)]
+        
+        # Plot the line - iterate through ALL data points in chronological order
         for i in range(len(self.data) - 1):
             x1, y1 = self.data[i]
             x2, y2 = self.data[i + 1]
             
-            # Convert to pixel coordinates
-            px1 = int(((x1 - x_min) / x_range) * plot_width)
-            py1 = int(((y_max - y1) / y_range) * plot_height)  # Flip y-axis
-            px2 = int(((x2 - x_min) / x_range) * plot_width)
-            py2 = int(((y_max - y2) / y_range) * plot_height)  # Flip y-axis
+            # Convert to pixel coordinates within plot area
+            px1 = int(((x1 - x_min) / (x_max - x_min)) * plot_width)
+            py1 = int(((y_max - y1) / (y_max - y_min)) * plot_height)  # Flip y-axis
+            px2 = int(((x2 - x_min) / (x_max - x_min)) * plot_width)
+            py2 = int(((y_max - y2) / (y_max - y_min)) * plot_height)  # Flip y-axis
             
-            # Clamp to grid bounds
+            # Clamp to plot grid bounds
             px1 = max(0, min(plot_width - 1, px1))
             py1 = max(0, min(plot_height - 1, py1))
             px2 = max(0, min(plot_width - 1, px2))
             py2 = max(0, min(plot_height - 1, py2))
             
             # Draw line using Bresenham's algorithm
-            self._draw_line(grid, px1, py1, px2, py2, plot_width, plot_height)
+            self._draw_line(plot_grid, px1, py1, px2, py2, plot_width, plot_height)
+        
+        # Copy plot grid to main grid (offset by y-axis width + 1 for the axis line)
+        plot_start_x = y_label_width + 1
+        for y in range(plot_height):
+            for x in range(plot_width):
+                if plot_grid[y][x] != ' ':
+                    grid[y][plot_start_x + x] = plot_grid[y][x]
         
         # Convert grid to string
         lines = [''.join(row) for row in grid]
