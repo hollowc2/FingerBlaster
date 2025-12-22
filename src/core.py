@@ -17,8 +17,6 @@ import threading
 from collections.abc import Callable, Awaitable
 from datetime import datetime
 from typing import Optional, Dict, List, Any, Tuple
-from weakref import WeakSet
-import weakref
 
 import pandas as pd
 
@@ -30,27 +28,28 @@ logger = logging.getLogger("FingerBlaster")
 
 
 class CallbackManager:
-    """Manages event callbacks with proper cleanup and weak references.
+    """Manages event callbacks with proper cleanup.
     
     This class addresses the memory leak issue by:
     1. Supporting callback unregistration
-    2. Using weak references to prevent circular dependencies
-    3. Providing cleanup methods
+    2. Providing cleanup methods
+    3. Using regular lists (not WeakSet) to prevent premature garbage collection
     """
     
     def __init__(self):
         """Initialize callback manager."""
-        # Use WeakSet to prevent memory leaks from circular references
-        self._callbacks: Dict[str, WeakSet] = {
-            'market_update': WeakSet(),
-            'btc_price_update': WeakSet(),
-            'price_update': WeakSet(),
-            'account_stats_update': WeakSet(),
-            'countdown_update': WeakSet(),
-            'prior_outcomes_update': WeakSet(),
-            'resolution': WeakSet(),
-            'log': WeakSet(),
-            'chart_update': WeakSet(),
+        # Use regular lists (not WeakSet) to prevent callbacks from being GC'd
+        # The unregister_callback method provides proper cleanup
+        self._callbacks: Dict[str, List[Callable]] = {
+            'market_update': [],
+            'btc_price_update': [],
+            'price_update': [],
+            'account_stats_update': [],
+            'countdown_update': [],
+            'prior_outcomes_update': [],
+            'resolution': [],
+            'log': [],
+            'chart_update': [],
         }
         # Use threading.Lock for synchronous methods, asyncio.Lock for async methods
         self._lock = threading.Lock()
@@ -71,7 +70,8 @@ class CallbackManager:
             return False
         
         with self._lock:
-            self._callbacks[event].add(callback)
+            if callback not in self._callbacks[event]:
+                self._callbacks[event].append(callback)
         return True
     
     def unregister(self, event: str, callback: Callable) -> bool:
@@ -89,9 +89,10 @@ class CallbackManager:
         
         with self._lock:
             try:
-                self._callbacks[event].discard(callback)
+                if callback in self._callbacks[event]:
+                    self._callbacks[event].remove(callback)
                 return True
-            except (KeyError, TypeError):
+            except (ValueError, TypeError):
                 return False
     
     def clear(self, event: Optional[str] = None) -> None:
@@ -108,8 +109,20 @@ class CallbackManager:
                 for callbacks in self._callbacks.values():
                     callbacks.clear()
     
+    def get_callbacks(self, event: str) -> List[Callable]:
+        """Get a snapshot of callbacks for an event (thread-safe).
+        
+        Args:
+            event: Event name
+            
+        Returns:
+            List of callbacks
+        """
+        with self._lock:
+            return list(self._callbacks.get(event, []))
+    
     async def emit(self, event: str, *args, **kwargs) -> None:
-        """Emit an event to all registered callbacks.
+        """Emit an event to all registered callbacks (async version).
         
         Args:
             event: Event name
@@ -217,18 +230,43 @@ class FingerBlasterCore:
     def _emit(self, event: str, *args, **kwargs) -> None:
         """Emit an event to all registered callbacks.
         
+        This method works like the original - it directly handles callbacks
+        to support both sync and async contexts (especially Qt integration).
+        
         Args:
             event: Event name
             *args: Positional arguments
             **kwargs: Keyword arguments
         """
-        # Use asyncio.create_task to ensure it runs even if called from sync context
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self.callback_manager.emit(event, *args, **kwargs))
-        except RuntimeError:
-            # No running loop - create one
-            asyncio.run(self.callback_manager.emit(event, *args, **kwargs))
+        # Get a snapshot of callbacks (thread-safe)
+        callbacks = self.callback_manager.get_callbacks(event)
+        
+        # Execute callbacks outside the lock to avoid deadlocks
+        for callback in callbacks:
+            try:
+                if asyncio.iscoroutinefunction(callback):
+                    # Try to get the running event loop, create task if possible
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(callback(*args, **kwargs))
+                    except RuntimeError:
+                        # No running loop - this can happen in Qt
+                        # Try to get any event loop
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if loop.is_running():
+                                loop.create_task(callback(*args, **kwargs))
+                            else:
+                                # Loop exists but not running - schedule it
+                                asyncio.ensure_future(callback(*args, **kwargs), loop=loop)
+                        except (RuntimeError, AttributeError):
+                            # No loop available - this will be handled by Qt integration
+                            # Just log a warning, the Qt layer will handle it
+                            logger.debug(f"No event loop available for async callback {event}")
+                else:
+                    callback(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"Error in callback for {event}: {e}", exc_info=True)
     
     def log_msg(self, message: str) -> None:
         """Log message and emit to UI.
