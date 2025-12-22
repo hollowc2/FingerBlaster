@@ -286,7 +286,9 @@ class FingerBlasterCore:
                 resolution = "YES"
             
             self.last_resolution = resolution
+            direction = "UP" if resolution == "YES" else "DOWN"
             self.log_msg(f"Market Resolved: {resolution} (BTC: ${btc_price:,.2f} vs Strike: {strike_str})")
+            self.log_msg(f"Market resolved {direction}")
             self._emit('resolution', resolution)
         except Exception as e:
             logger.error(f"Error showing resolution: {e}")
