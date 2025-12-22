@@ -30,9 +30,9 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QSplitter, QLabel, QDialog, QScrollArea
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QKeySequence, QShortcut, QKeyEvent
-from PyQt6.QtCore import QObject, QEvent
+from PyQt6.QtCore import QEvent
 
 from src.core import FingerBlasterCore
 from src.config import AppConfig
@@ -91,6 +91,20 @@ def run_async_task(coro):
                 asyncio.run_coroutine_threadsafe(coro, _qt_event_loop)
 
 
+class UIUpdateSignals(QObject):
+    """Signals for thread-safe UI updates."""
+    market_strike = pyqtSignal(str)
+    market_ends = pyqtSignal(str)
+    btc_price = pyqtSignal(float)
+    prices = pyqtSignal(float, float, str)
+    account_stats = pyqtSignal(float, float, float, float)
+    countdown = pyqtSignal(str)
+    prior_outcomes = pyqtSignal(str)
+    resolution_show = pyqtSignal(str)
+    resolution_hide = pyqtSignal()
+    log_message = pyqtSignal(str)
+
+
 class FingerBlasterPyQtApp(QMainWindow):
     """Main PyQt6 application window."""
     
@@ -103,13 +117,30 @@ class FingerBlasterPyQtApp(QMainWindow):
         self.graphs_visible = True
         self.log_visible = True
         
+        # Create signals object for thread-safe updates
+        self.signals = UIUpdateSignals()
+        
         self.init_ui()
+        self._setup_signal_connections()  # Connect signals after UI is created
         self.setup_callbacks()
         self.setup_timers()
         self.setup_shortcuts()
         
         # Check prior outcomes after a delay
         QTimer.singleShot(3000, lambda: run_async_task(self.core._check_and_add_prior_outcomes()))
+    
+    def _connect_signals(self):
+        """Connect signals to UI update methods."""
+        self.signals.market_strike.connect(self.market_panel.update_strike)
+        self.signals.market_ends.connect(self.market_panel.update_ends)
+        self.signals.btc_price.connect(self.market_panel.update_btc_price)
+        self.signals.prices.connect(self.price_panel.update_prices)
+        self.signals.account_stats.connect(self.stats_panel.update_stats)
+        self.signals.countdown.connect(self.market_panel.update_time_left)
+        self.signals.prior_outcomes.connect(self.market_panel.update_prior_outcomes)
+        self.signals.resolution_show.connect(self._show_resolution_slot)
+        self.signals.resolution_hide.connect(self.resolution_overlay.hide_resolution)
+        self.signals.log_message.connect(self._update_log_slot)
     
     def init_ui(self):
         """Initialize the UI."""
@@ -277,15 +308,16 @@ class FingerBlasterPyQtApp(QMainWindow):
     
     def setup_callbacks(self):
         """Setup callbacks from core."""
-        self.core.register_callback('market_update', self._on_market_update)
-        self.core.register_callback('btc_price_update', self._on_btc_price_update)
-        self.core.register_callback('price_update', self._on_price_update)
-        self.core.register_callback('account_stats_update', self._on_account_stats_update)
-        self.core.register_callback('countdown_update', self._on_countdown_update)
-        self.core.register_callback('prior_outcomes_update', self._on_prior_outcomes_update)
-        self.core.register_callback('resolution', self._on_resolution)
+        # Use synchronous wrappers that schedule UI updates on main thread
+        self.core.register_callback('market_update', self._on_market_update_sync)
+        self.core.register_callback('btc_price_update', self._on_btc_price_update_sync)
+        self.core.register_callback('price_update', self._on_price_update_sync)
+        self.core.register_callback('account_stats_update', self._on_account_stats_update_sync)
+        self.core.register_callback('countdown_update', self._on_countdown_update_sync)
+        self.core.register_callback('prior_outcomes_update', self._on_prior_outcomes_update_sync)
+        self.core.register_callback('resolution', self._on_resolution_sync)
         self.core.register_callback('log', self._on_log)
-        self.core.register_callback('chart_update', self._on_chart_update)
+        self.core.register_callback('chart_update', self._on_chart_update_sync)
     
     def setup_timers(self):
         """Setup update timers."""
@@ -408,39 +440,60 @@ class FingerBlasterPyQtApp(QMainWindow):
             # Let other keys be handled normally
             super().keyPressEvent(event)
     
-    # Callback handlers (wrapped to handle async callbacks)
-    # All UI updates are scheduled on the main thread using QTimer.singleShot
-    async def _on_market_update(self, strike: str, ends: str):
+    def _setup_signal_connections(self):
+        """Setup signal connections after UI is initialized."""
+        self.signals.market_strike.connect(self.market_panel.update_strike)
+        self.signals.market_ends.connect(self.market_panel.update_ends)
+        self.signals.btc_price.connect(self.market_panel.update_btc_price)
+        self.signals.prices.connect(self.price_panel.update_prices)
+        self.signals.account_stats.connect(self.stats_panel.update_stats)
+        self.signals.countdown.connect(self.market_panel.update_time_left)
+        self.signals.prior_outcomes.connect(self.market_panel.update_prior_outcomes)
+        self.signals.resolution_show.connect(self._show_resolution_slot)
+        self.signals.resolution_hide.connect(self.resolution_overlay.hide_resolution)
+        self.signals.log_message.connect(self._update_log_slot)
+    
+    def _show_resolution_slot(self, resolution: str):
+        """Show resolution overlay slot."""
+        self.resolution_overlay.setGeometry(self.geometry())
+        self.resolution_overlay.show_resolution(resolution)
+        QTimer.singleShot(
+            int(self.config.resolution_overlay_duration * 1000),
+            self.resolution_overlay.hide_resolution
+        )
+    
+    def _update_log_slot(self, message: str):
+        """Update log slot."""
+        self.log_panel.append(message)
+        scrollbar = self.log_panel.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+    
+    # Callback handlers - synchronous wrappers that emit signals for thread-safe UI updates
+    def _on_market_update_sync(self, strike: str, ends: str):
         """Handle market update from core."""
-        # Schedule UI update on main thread
-        QTimer.singleShot(0, lambda: self.market_panel.update_strike(strike))
-        QTimer.singleShot(0, lambda: self.market_panel.update_ends(ends))
+        self.signals.market_strike.emit(strike)
+        self.signals.market_ends.emit(ends)
     
-    async def _on_btc_price_update(self, price: float):
+    def _on_btc_price_update_sync(self, price: float):
         """Handle BTC price update from core."""
-        # Schedule UI update on main thread
-        QTimer.singleShot(0, lambda: self.market_panel.update_btc_price(price))
+        self.signals.btc_price.emit(price)
     
-    async def _on_price_update(self, yes_price: float, no_price: float, best_bid: float, best_ask: float):
+    def _on_price_update_sync(self, yes_price: float, no_price: float, best_bid: float, best_ask: float):
         """Handle price update from core."""
-        # Schedule UI update on main thread
         spread = f"{best_bid:.2f} / {best_ask:.2f}"
-        QTimer.singleShot(0, lambda: self.price_panel.update_prices(yes_price, no_price, spread))
+        self.signals.prices.emit(yes_price, no_price, spread)
     
-    async def _on_account_stats_update(self, balance: float, yes_balance: float, no_balance: float, size: float):
+    def _on_account_stats_update_sync(self, balance: float, yes_balance: float, no_balance: float, size: float):
         """Handle account stats update from core."""
         # Always use the current selected_size from core to ensure accuracy
-        # This prevents race conditions where async update might have stale data
         current_size = self.core.selected_size
-        # Schedule UI update on main thread
-        QTimer.singleShot(0, lambda: self.stats_panel.update_stats(balance, yes_balance, no_balance, current_size))
+        self.signals.account_stats.emit(balance, yes_balance, no_balance, current_size)
     
-    async def _on_countdown_update(self, time_str: str):
+    def _on_countdown_update_sync(self, time_str: str):
         """Handle countdown update from core."""
-        # Schedule UI update on main thread to avoid glitching
-        QTimer.singleShot(0, lambda: self.market_panel.update_time_left(time_str))
+        self.signals.countdown.emit(time_str)
     
-    async def _on_prior_outcomes_update(self, outcomes: list):
+    def _on_prior_outcomes_update_sync(self, outcomes: list):
         """Handle prior outcomes update from core."""
         outcome_str = ""
         for outcome in outcomes:
@@ -450,26 +503,14 @@ class FingerBlasterPyQtApp(QMainWindow):
                 outcome_str += "▼"
         if not outcome_str:
             outcome_str = "---"
-        # Schedule UI update on main thread
-        QTimer.singleShot(0, lambda: self.market_panel.update_prior_outcomes(outcome_str))
+        self.signals.prior_outcomes.emit(outcome_str)
     
-    async def _on_resolution(self, resolution: Optional[str]):
+    def _on_resolution_sync(self, resolution: Optional[str]):
         """Handle resolution from core."""
         if resolution:
-            # Schedule UI update on main thread
-            def show_resolution():
-                # Resize overlay to cover entire window
-                self.resolution_overlay.setGeometry(self.geometry())
-                self.resolution_overlay.show_resolution(resolution)
-                # Hide after duration
-                QTimer.singleShot(
-                    int(self.config.resolution_overlay_duration * 1000),
-                    self.resolution_overlay.hide_resolution
-                )
-            QTimer.singleShot(0, show_resolution)
+            self.signals.resolution_show.emit(resolution)
         else:
-            # Schedule UI update on main thread
-            QTimer.singleShot(0, self.resolution_overlay.hide_resolution)
+            self.signals.resolution_hide.emit()
     
     def resizeEvent(self, event):
         """Handle window resize - update overlay size."""
@@ -479,20 +520,15 @@ class FingerBlasterPyQtApp(QMainWindow):
     
     def _on_log(self, message: str):
         """Handle log message from core."""
-        # Schedule UI update on main thread
-        def update_log():
-            self.log_panel.append(message)
-            # Auto-scroll to bottom
-            scrollbar = self.log_panel.verticalScrollBar()
-            scrollbar.setValue(scrollbar.maximum())
-        QTimer.singleShot(0, update_log)
+        self.signals.log_message.emit(message)
     
-    async def _on_chart_update(self, *args):
+    def _on_chart_update_sync(self, *args):
         """Handle chart update from core."""
         if not self.graphs_visible:
             return
         
-        # Schedule UI update on main thread
+        # For chart updates, use QTimer to schedule on main thread
+        # We can't easily use signals for complex data structures
         def update_chart():
             try:
                 if len(args) == 3 and args[2] == 'btc':
@@ -505,6 +541,7 @@ class FingerBlasterPyQtApp(QMainWindow):
                     self.probability_chart.update_data(history)
             except Exception as e:
                 logger.debug(f"Error updating chart: {e}")
+        # Use QTimer which is thread-safe when called from any thread
         QTimer.singleShot(0, update_chart)
     
     # Action handlers
