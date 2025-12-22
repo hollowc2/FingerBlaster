@@ -303,9 +303,15 @@ class FingerBlasterApp(App):
             x = [p[0] for p in history]
             y = [p[1] for p in history]
             
+            # Plot ONLY the actual data we have - no boundary points, no filling
             plt.plot(x, y, color="green")
+            
+            # Set fixed x-axis limits AFTER plotting to ensure they're applied
+            # This ensures the x-axis stays fixed at 0-900 seconds regardless of data range
+            # The line will grow from left to right as time progresses
             plt.xlim(0, self.config.market_duration_seconds)
             plt.ylim(0, 1)
+            
             plt.grid(False, "x")
             plt.xticks([])
             plot.refresh()
