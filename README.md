@@ -35,13 +35,10 @@ A high-performance trading interface for Polymarket's "BTC Up or Down 15m" marke
 ![Desktop UI](data/images/FingerBlaster_gui.png)
 
 ### Terminal UI (Textual)
-![Terminal UI](data/images/FingerBlaster_term.png)
+![Terminal UI](data/images/fingerblaster_terminal.png)
 
 ### Terminal UI - Compact Mode
-![Terminal UI Compact](data/images/FingerBlaster_term_micro.png)
-
-### Terminal UI - No Charts
-![Terminal UI No Charts](data/images/FingerBlaster_term_noChart.png)
+![Terminal UI Compact](data/images/fingerblaster_qt_micro.png)
 
 ## 🚀 Installation
 
