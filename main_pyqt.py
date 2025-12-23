@@ -208,7 +208,7 @@ class FingerBlasterPyQtApp(QMainWindow):
         left_layout.addWidget(self.stats_panel)
         
         # Action buttons panel
-        buttons_label = QLabel("ACTIONS")
+        buttons_label = QLabel("")
         buttons_label.setStyleSheet("font-weight: bold; color: #00ffff; font-size: 12pt; padding: 5px;")
         left_layout.addWidget(buttons_label)
         
@@ -219,7 +219,7 @@ class FingerBlasterPyQtApp(QMainWindow):
         
         # Only Help button
         row = QHBoxLayout()
-        self.help_button = QPushButton("? HELP")
+        self.help_button = QPushButton("HELP")
         self.help_button.clicked.connect(self.show_help)
         row.addWidget(self.help_button)
         buttons_grid.addLayout(row)
@@ -431,8 +431,9 @@ class FingerBlasterPyQtApp(QMainWindow):
         self.signals.log_message.connect(self._update_log_slot, connection_type)
     
     def _show_resolution_slot(self, resolution: str):
-        """Show resolution overlay slot."""
-        self.resolution_overlay.setGeometry(self.geometry())
+        """Show resolution overlay slot with green/red flash."""
+        # Position overlay to cover entire main window
+        self.resolution_overlay.setGeometry(0, 0, self.width(), self.height())
         self.resolution_overlay.show_resolution(resolution)
         QTimer.singleShot(
             int(self.config.resolution_overlay_duration * 1000),
@@ -460,7 +461,8 @@ class FingerBlasterPyQtApp(QMainWindow):
         spread = f"{best_bid:.2f} / {best_ask:.2f}"
         self.signals.prices.emit(yes_price, no_price, spread)
     
-    def _on_account_stats_update_sync(self, balance: float, yes_balance: float, no_balance: float, size: float):
+    def _on_account_stats_update_sync(self, balance: float, yes_balance: float, no_balance: float, size: float, 
+                                      avg_entry_price_yes: Optional[float] = None, avg_entry_price_no: Optional[float] = None):
         """Handle account stats update from core."""
         # Always use the current selected_size from core to ensure accuracy
         current_size = self.core.selected_size
@@ -475,9 +477,9 @@ class FingerBlasterPyQtApp(QMainWindow):
         outcome_str = ""
         for outcome in outcomes:
             if outcome == "YES":
-                outcome_str += "▲"
+                outcome_str += '<span style="color: #00ff00;">▲</span>'  # Green up arrow
             elif outcome == "NO":
-                outcome_str += "▼"
+                outcome_str += '<span style="color: #ff0000;">▼</span>'  # Red down arrow
         if not outcome_str:
             outcome_str = "---"
         self.signals.prior_outcomes.emit(outcome_str)
@@ -493,7 +495,7 @@ class FingerBlasterPyQtApp(QMainWindow):
         """Handle window resize - update overlay size."""
         super().resizeEvent(event)
         if self.resolution_overlay.isVisible():
-            self.resolution_overlay.setGeometry(self.geometry())
+            self.resolution_overlay.setGeometry(0, 0, self.width(), self.height())
     
     def _on_log(self, message: str):
         """Handle log message from core."""
