@@ -217,62 +217,14 @@ class FingerBlasterPyQtApp(QMainWindow):
         buttons_grid = QVBoxLayout()
         buttons_widget.setLayout(buttons_grid)
         
-        # Row 1: Buy buttons
-        row1 = QHBoxLayout()
-        self.buy_yes_btn = QPushButton("Y: BUY YES")
-        self.buy_yes_btn.clicked.connect(self.buy_yes)
-        row1.addWidget(self.buy_yes_btn)
-        
-        self.buy_no_btn = QPushButton("N: BUY NO")
-        self.buy_no_btn.clicked.connect(self.buy_no)
-        row1.addWidget(self.buy_no_btn)
-        buttons_grid.addLayout(row1)
-        
-        # Row 2: Flatten and Cancel
-        row2 = QHBoxLayout()
-        self.flatten_btn = QPushButton("F: FLATTEN")
-        self.flatten_btn.clicked.connect(self.flatten)
-        row2.addWidget(self.flatten_btn)
-        
-        self.cancel_btn = QPushButton("C: CANCEL")
-        self.cancel_btn.clicked.connect(self.cancel_all)
-        row2.addWidget(self.cancel_btn)
-        buttons_grid.addLayout(row2)
-        
-        # Row 3: Size buttons
-        row3 = QHBoxLayout()
-        self.size_up_btn = QPushButton("+: SIZE UP")
-        self.size_up_btn.clicked.connect(self.size_up)
-        row3.addWidget(self.size_up_btn)
-        
-        self.size_down_btn = QPushButton("-: SIZE DOWN")
-        self.size_down_btn.clicked.connect(self.size_down)
-        row3.addWidget(self.size_down_btn)
-        buttons_grid.addLayout(row3)
-        
-        # Row 4: Toggle buttons
-        row4 = QHBoxLayout()
-        self.toggle_graphs_btn = QPushButton("H: TOGGLE GRAPHS")
-        self.toggle_graphs_btn.clicked.connect(self.toggle_graphs)
-        row4.addWidget(self.toggle_graphs_btn)
-        
-        self.toggle_log_btn = QPushButton("L: TOGGLE LOG")
-        self.toggle_log_btn.clicked.connect(self.toggle_log)
-        row4.addWidget(self.toggle_log_btn)
-        buttons_grid.addLayout(row4)
-        
-        # Row 5: Help and Quit
-        row5 = QHBoxLayout()
+        # Only Help button
+        row = QHBoxLayout()
         self.help_button = QPushButton("? HELP")
         self.help_button.clicked.connect(self.show_help)
-        row5.addWidget(self.help_button)
+        row.addWidget(self.help_button)
+        buttons_grid.addLayout(row)
         
-        self.quit_btn = QPushButton("Q: QUIT")
-        self.quit_btn.clicked.connect(self.quit_app)
-        row5.addWidget(self.quit_btn)
-        buttons_grid.addLayout(row5)
-        
-        # Style all buttons
+        # Style the button
         button_style = """
             QPushButton {
                 background-color: #1a1a1a;
@@ -291,11 +243,7 @@ class FingerBlasterPyQtApp(QMainWindow):
                 background-color: #00cccc;
             }
         """
-        for row in [row1, row2, row3, row4, row5]:
-            for i in range(row.count()):
-                item = row.itemAt(i)
-                if item and item.widget():
-                    item.widget().setStyleSheet(button_style)
+        self.help_button.setStyleSheet(button_style)
         
         left_layout.addWidget(buttons_widget)
         
@@ -398,74 +346,69 @@ class FingerBlasterPyQtApp(QMainWindow):
             return shortcut
         
         # Buy YES
-        create_shortcut("Y", self.buy_yes)
-        create_shortcut("y", self.buy_yes)
+        create_shortcut("Ctrl+Y", self.buy_yes)
         
         # Buy NO
-        create_shortcut("N", self.buy_no)
-        create_shortcut("n", self.buy_no)
+        create_shortcut("Ctrl+N", self.buy_no)
         
         # Flatten
-        create_shortcut("F", self.flatten)
-        create_shortcut("f", self.flatten)
+        create_shortcut("Ctrl+F", self.flatten)
         
         # Cancel All
-        create_shortcut("C", self.cancel_all)
-        create_shortcut("c", self.cancel_all)
+        create_shortcut("Ctrl+C", self.cancel_all)
         
         # Size up
-        create_shortcut("+", self.size_up)
-        create_shortcut("=", self.size_up)
+        create_shortcut("Ctrl++", self.size_up)
+        create_shortcut("Ctrl+=", self.size_up)
         
         # Size down
-        create_shortcut("-", self.size_down)
-        create_shortcut("_", self.size_down)
+        create_shortcut("Ctrl+-", self.size_down)
         
         # Toggle graphs
-        create_shortcut("H", self.toggle_graphs)
-        create_shortcut("h", self.toggle_graphs)
+        create_shortcut("Ctrl+H", self.toggle_graphs)
         
         # Toggle log
-        create_shortcut("L", self.toggle_log)
-        create_shortcut("l", self.toggle_log)
+        create_shortcut("Ctrl+L", self.toggle_log)
         
         # Quit
-        create_shortcut("Q", self.quit_app)
-        create_shortcut("q", self.quit_app)
+        create_shortcut("Ctrl+Q", self.quit_app)
     
     def keyPressEvent(self, event: QKeyEvent):
         """Handle key press events for keyboard shortcuts."""
         key = event.key()
         modifiers = event.modifiers()
         
-        # Handle key presses (case-insensitive)
-        key_char = event.text().upper() if event.text() else ""
+        # Only handle shortcuts with Control modifier
+        if not (modifiers & Qt.KeyboardModifier.ControlModifier):
+            super().keyPressEvent(event)
+            return
         
-        if key == Qt.Key.Key_Y or key_char == "Y":
+        # Handle key presses with Control modifier
+        if key == Qt.Key.Key_Y:
             self.buy_yes()
             event.accept()
-        elif key == Qt.Key.Key_N or key_char == "N":
+        elif key == Qt.Key.Key_N:
             self.buy_no()
             event.accept()
-        elif key == Qt.Key.Key_F or key_char == "F":
+        elif key == Qt.Key.Key_F:
             self.flatten()
             event.accept()
-        elif key == Qt.Key.Key_C or key_char == "C":
+        elif key == Qt.Key.Key_C:
             self.cancel_all()
             event.accept()
-        elif key == Qt.Key.Key_Plus or key == Qt.Key.Key_Equal or key_char == "+" or key_char == "=":
+        elif key == Qt.Key.Key_Plus or key == Qt.Key.Key_Equal:
             self.size_up()
             event.accept()
-        elif key == Qt.Key.Key_Minus or key == Qt.Key.Key_Underscore or key_char == "-" or key_char == "_":
+        elif key == Qt.Key.Key_Minus:
             self.size_down()
             event.accept()
-        elif key == Qt.Key.Key_H or key_char == "H":
+        elif key == Qt.Key.Key_H:
             self.toggle_graphs()
             event.accept()
-        elif key == Qt.Key.Key_L or key_char == "L":
+        elif key == Qt.Key.Key_L:
             self.toggle_log()
             event.accept()
-        elif key == Qt.Key.Key_Q or key_char == "Q":
+        elif key == Qt.Key.Key_Q:
             self.quit_app()
             event.accept()
         else:
@@ -686,19 +629,20 @@ class FingerBlasterPyQtApp(QMainWindow):
         """Event filter to prevent log panel from consuming shortcut key events."""
         # Only filter events from the log panel
         if obj == self.log_panel and event.type() == QEvent.Type.KeyPress:
-            # Check if this is one of our shortcut keys
-            key_char = event.text().upper() if event.text() else ""
-            key = event.key()
-            shortcut_keys = [
-                Qt.Key.Key_Y, Qt.Key.Key_N, Qt.Key.Key_F, Qt.Key.Key_C,
-                Qt.Key.Key_Plus, Qt.Key.Key_Equal, Qt.Key.Key_Minus, Qt.Key.Key_Underscore,
-                Qt.Key.Key_H, Qt.Key.Key_L, Qt.Key.Key_Q
-            ]
-            # If it's a shortcut key, prevent the log panel from processing it
-            # ApplicationShortcut will handle it at the application level
-            if key in shortcut_keys or key_char in ["Y", "N", "F", "C", "+", "=", "-", "_", "H", "L", "Q"]:
-                # Let ApplicationShortcut handle it, but prevent log panel from processing
-                return True  # Consume the event so log panel doesn't process it
+            # Check if this is one of our shortcut keys with Control modifier
+            modifiers = event.modifiers()
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                key = event.key()
+                shortcut_keys = [
+                    Qt.Key.Key_Y, Qt.Key.Key_N, Qt.Key.Key_F, Qt.Key.Key_C,
+                    Qt.Key.Key_Plus, Qt.Key.Key_Equal, Qt.Key.Key_Minus,
+                    Qt.Key.Key_H, Qt.Key.Key_L, Qt.Key.Key_Q
+                ]
+                # If it's a shortcut key with Control, prevent the log panel from processing it
+                # ApplicationShortcut will handle it at the application level
+                if key in shortcut_keys:
+                    # Let ApplicationShortcut handle it, but prevent log panel from processing
+                    return True  # Consume the event so log panel doesn't process it
         return super().eventFilter(obj, event)
     
     def show_help(self):
@@ -737,16 +681,34 @@ class FingerBlasterPyQtApp(QMainWindow):
         
         # Keybindings
         keybindings = [
-            ("Y / y", "Buy YES"),
-            ("N / n", "Buy NO"),
-            ("F / f", "Flatten all positions"),
-            ("C / c", "Cancel all pending orders"),
-            ("+ / =", "Increase order size"),
-            ("- / _", "Decrease order size"),
-            ("H / h", "Toggle graphs visibility"),
-            ("L / l", "Toggle log panel"),
-            ("Q / q", "Quit application"),
+            ("Ctrl+Y", "Buy YES"),
+            ("Ctrl+N", "Buy NO"),
+            ("Ctrl+F", "Flatten all positions"),
+            ("Ctrl+C", "Cancel all pending orders"),
+            ("Ctrl++ / Ctrl+=", "Increase order size"),
+            ("Ctrl+-", "Decrease order size"),
+            ("Ctrl+H", "Toggle graphs visibility"),
+            ("Ctrl+L", "Toggle log panel"),
+            ("Ctrl+Q", "Quit application"),
         ]
+        
+        # Add instruction text
+        instruction_label = QLabel(
+            "Note: All shortcuts require pressing Control (Ctrl) + the hotkey to work."
+        )
+        instruction_label.setStyleSheet("""
+            font-size: 11pt;
+            color: #ffff00;
+            padding: 10px;
+            font-weight: bold;
+        """)
+        instruction_label.setWordWrap(True)
+        content_layout.addWidget(instruction_label)
+        
+        # Add separator
+        separator = QLabel("─" * 50)
+        separator.setStyleSheet("color: #00ffff; padding: 5px;")
+        content_layout.addWidget(separator)
         
         for key, description in keybindings:
             row = QHBoxLayout()
