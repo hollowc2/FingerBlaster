@@ -40,6 +40,17 @@ A high-performance trading interface for Polymarket's "BTC Up or Down 15m" marke
 ### Terminal UI - Compact Mode
 ![Terminal UI Compact](data/images/fingerblaster_qt_micro.png)
 
+## 🎬 Demo Videos
+
+### Live Trading Demo
+![Live Trading](data/livetrade.gif)
+
+### Fullscreen Interface
+![Fullscreen Interface](data/fingerblaster_fullscreen.gif)
+
+### Side-by-Side with Polymarket
+![FingerBlaster vs Polymarket](data/fingerblaster_fullscreen_next_to_polymarket.gif)
+
 ## 🚀 Installation
 
 ### Prerequisites
@@ -165,6 +176,7 @@ The application creates a `data/` directory containing:
 - `finger_blaster.log` - Application logs with timestamps
 - `prior_outcomes.json` - History of market resolutions with timestamps
 - `images/` - Application icons and screenshots
+- `*.gif` - Demo videos showing the application in action
 
 ## 🏗️ Architecture
 
