@@ -400,18 +400,34 @@ class FingerBlasterCore:
                             # For dynamic strikes, use RTDS to get Chainlink price at market start
                             market_start_time = await self.market_manager.get_market_start_time()
                             if strike == "Dynamic" and market_start_time:
-                                # Try to get Chainlink price from RTDS historical data
-                                chainlink_price = self.rtds_manager.get_chainlink_price_at(market_start_time)
-                                if chainlink_price and chainlink_price > 0:
-                                    strike = f"{chainlink_price:,.2f}"
-                                    self.log_msg(
-                                        f"Dynamic strike: Using RTDS Chainlink price at market start ({market_start_time}): ${chainlink_price:,.2f}"
-                                    )
-                                    # Update market with correct strike
-                                    new_market['strike_price'] = strike
-                                    await self.market_manager.set_market(new_market)
-                                else:
-                                    # Fallback: try connector's Chainlink API
+                                # Check if market started in the past (we joined mid-cycle)
+                                # RTDS only has data from when the app started, so if market started
+                                # more than 2 minutes ago, we need to use the API instead
+                                now = pd.Timestamp.now(tz='UTC')
+                                time_since_start = (now - market_start_time).total_seconds()
+                                
+                                # If market started more than 2 minutes ago, RTDS won't have the data
+                                # Skip RTDS and go straight to API
+                                chainlink_price = None
+                                if time_since_start <= 120:  # Market started within last 2 minutes
+                                    # Try RTDS first (only if we were running when market started)
+                                    chainlink_price = self.rtds_manager.get_chainlink_price_at(market_start_time)
+                                    if chainlink_price and chainlink_price > 0:
+                                        strike = f"{chainlink_price:,.2f}"
+                                        self.log_msg(
+                                            f"Dynamic strike: Using RTDS Chainlink price at market start ({market_start_time}): ${chainlink_price:,.2f}"
+                                        )
+                                        # Update market with correct strike
+                                        new_market['strike_price'] = strike
+                                        await self.market_manager.set_market(new_market)
+                                
+                                # If RTDS doesn't have it (or market started >2 min ago), use API
+                                if not chainlink_price or chainlink_price <= 0:
+                                    if time_since_start > 120:
+                                        self.log_msg(
+                                            f"Market started {time_since_start:.0f}s ago - using API for historical price lookup"
+                                        )
+                                    # Try connector's Chainlink API
                                     chainlink_price = await asyncio.to_thread(
                                         self.connector.get_chainlink_price_at, market_start_time
                                     )
@@ -436,13 +452,11 @@ class FingerBlasterCore:
                                             await self.market_manager.set_market(new_market)
                                         else:
                                             self.log_msg(
-                                                f"WARNING: Could not determine dynamic strike price. Using current Chainlink price."
+                                                f"WARNING: Could not determine dynamic strike price at market start ({market_start_time}). "
+                                                f"Market started {time_since_start:.0f}s ago. This may cause incorrect strike calculation."
                                             )
-                                            current_chainlink = self.rtds_manager.get_chainlink_price()
-                                            if current_chainlink:
-                                                strike = f"{current_chainlink:,.2f}"
-                                                new_market['strike_price'] = strike
-                                                await self.market_manager.set_market(new_market)
+                                            # Don't use current price as fallback - it's wrong for mid-cycle joins
+                                            # Keep strike as "Dynamic" so user knows it's not resolved
                         
                         self.log_msg(
                             f"Market Found: Strike={strike}, End={new_market.get('end_date', 'N/A')}"
@@ -808,6 +822,7 @@ class FingerBlasterCore:
         if len(self.prior_outcomes) > self.config.max_prior_outcomes:
             self.prior_outcomes.pop(0)
         
+        logger.info(f"Saving prior outcome: {outcome_upper} at {timestamp} (total: {len(self.prior_outcomes)})")
         self._save_prior_outcomes()
         self._update_prior_outcomes_display()
     
@@ -854,6 +869,7 @@ class FingerBlasterCore:
             
             # Atomic rename
             os.replace(temp_path, file_path)
+            logger.debug(f"Successfully saved {len(self.prior_outcomes)} prior outcomes to {file_path}")
         except Exception as e:
             logger.error(f"Error saving prior outcomes: {e}", exc_info=True)
     
