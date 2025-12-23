@@ -130,6 +130,9 @@ class FingerBlasterPyQtApp(QMainWindow):
         # Send initial log message to verify callbacks work
         self.core.log_msg("Ready to Blast. Initializing...")
         
+        # Start RTDS early for real-time BTC prices matching Polymarket
+        QTimer.singleShot(100, lambda: run_async_task(self.core.start_rtds()))
+        
         # Trigger initial chart updates after a delay to ensure data is available
         def trigger_initial_updates():
             run_async_task(self._force_chart_updates())

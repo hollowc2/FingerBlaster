@@ -29,6 +29,14 @@ class AppConfig:
     ws_ping_timeout: int = 10
     ws_recv_timeout: float = 1.0
     
+    # RTDS (Real Time Data Stream) settings for crypto prices
+    rtds_uri: str = "wss://ws-live-data.polymarket.com"
+    rtds_reconnect_delay: int = 5
+    rtds_max_reconnect_attempts: int = 10
+    rtds_ping_interval: int = 20
+    rtds_ping_timeout: int = 10
+    rtds_recv_timeout: float = 1.0
+    
     # UI settings
     time_warning_threshold_minutes: int = 2
     resolution_overlay_duration: float = 3.0

@@ -331,7 +331,8 @@ class PolymarketConnector(DataConnector):
         """
         Extract strike price from market data using multiple strategies.
         
-        Extracted from duplicate code in get_active_market() and get_next_market()
+        Improved to check more fields and be more accurate.
+        For dynamic strikes, uses RTDS or fetches price at exact market start time.
         
         Args:
             market: Market data dictionary
@@ -340,49 +341,142 @@ class PolymarketConnector(DataConnector):
         Returns:
             Strike price as string
         """
-        # Strategy 1: Check groupItemTitle
+        # Log all available fields for debugging (first time only to avoid spam)
+        if not hasattr(self, '_logged_fields'):
+            logger.debug(f"Market fields: {list(market.keys())}")
+            logger.debug(f"Event fields: {list(event.keys())}")
+            # Log sample values for key fields (including groupItemThreshold which might be the strike!)
+            for key in ['groupItemThreshold', 'groupItemTitle', 'title', 'question', 'description', 'resolutionCriteria']:
+                if key in market:
+                    logger.debug(f"Market.{key} = {market[key]}")
+            for key in ['resolutionCriteria', 'endDate']:
+                if key in event:
+                    logger.debug(f"Event.{key} = {event[key]}")
+            self._logged_fields = True
+        
+        # Strategy 0: Check groupItemThreshold FIRST (this is likely the strike price Polymarket uses!)
+        if 'groupItemThreshold' in market:
+            threshold = market.get('groupItemThreshold')
+            logger.debug(f"Checking groupItemThreshold value: {threshold} (type: {type(threshold)})")
+            if threshold is not None:
+                try:
+                    # Handle both string and numeric types
+                    if isinstance(threshold, str):
+                        # Remove any formatting
+                        threshold_clean = threshold.replace('$', '').replace(',', '').strip()
+                        threshold_val = float(threshold_clean)
+                    else:
+                        threshold_val = float(threshold)
+                    
+                    if threshold_val > 0:
+                        logger.info(f"✓ Found strike in groupItemThreshold: {threshold_val:,.2f}")
+                        return f"{threshold_val:,.2f}"
+                    else:
+                        logger.debug(f"groupItemThreshold is zero or negative: {threshold_val}")
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"Could not parse groupItemThreshold '{threshold}': {e}")
+        else:
+            logger.debug("groupItemThreshold not found in market data")
+        
+        # Strategy 1: Check for explicit strike/resolutionCriteria field
+        if 'resolutionCriteria' in market:
+            criteria = market['resolutionCriteria']
+            if isinstance(criteria, dict):
+                strike = criteria.get('strike') or criteria.get('price') or criteria.get('threshold')
+                if strike:
+                    logger.info(f"Found strike in resolutionCriteria: {strike}")
+                    return str(strike)
+        
+        # Check event-level resolution criteria
+        if 'resolutionCriteria' in event:
+            criteria = event['resolutionCriteria']
+            if isinstance(criteria, dict):
+                strike = criteria.get('strike') or criteria.get('price') or criteria.get('threshold')
+                if strike:
+                    logger.info(f"Found strike in event resolutionCriteria: {strike}")
+                    return str(strike)
+        
+        # Strategy 1: Check groupItemTitle (most reliable for static strikes)
         strike_price = market.get('groupItemTitle', '').replace('> ', '').replace('< ', '').strip()
         if strike_price:
-            return strike_price
+            # Clean up any remaining formatting
+            strike_price = strike_price.replace('$', '').replace(',', '').strip()
+            if strike_price and strike_price != "N/A":
+                logger.info(f"Found strike in groupItemTitle: {strike_price}")
+                return strike_price
         
-        # Strategy 2: Parse from question field
+        # Strategy 2: Check title field
+        title = market.get('title', '')
+        if title:
+            # Pattern: "> 12345" or "BTC > $12345"
+            match = re.search(r'>\s*\$?([0-9,.]+)', title)
+            if match:
+                return match.group(1).replace(',', '')
+        
+        # Strategy 3: Parse from question field
         if 'question' in market:
             question = market['question']
             
-            # Pattern 1: "> 12345"
-            match = re.search(r'>\s*([0-9,.]+)', question)
+            # Pattern 1: "> 12345" or "> $12345"
+            match = re.search(r'>\s*\$?([0-9,.]+)', question)
             if match:
-                return match.group(1)
+                return match.group(1).replace(',', '')
             
-            # Pattern 2: "above $12345"
+            # Pattern 2: "above $12345" or "above 12345"
             match = re.search(r'above\s+\$?([0-9,.]+)', question, re.IGNORECASE)
             if match:
-                return match.group(1)
+                return match.group(1).replace(',', '')
+            
+            # Pattern 3: ">= 12345"
+            match = re.search(r'>=\s*\$?([0-9,.]+)', question)
+            if match:
+                return match.group(1).replace(',', '')
         
-        # Strategy 3: Parse from description
+        # Strategy 4: Parse from description
         if 'description' in market:
             description = market['description']
             
             # Pattern 1: "greater than $12345"
-            match = re.search(r"greater than \$?([0-9,.]+)", description)
+            match = re.search(r"greater than \$?([0-9,.]+)", description, re.IGNORECASE)
             if match:
-                return match.group(1)
+                return match.group(1).replace(',', '')
             
-            # Pattern 2: Dynamic strike (price at beginning of range)
-            if "price at the beginning of that range" in description:
+            # Pattern 2: "price at the beginning of that range" (dynamic strike)
+            if "price at the beginning of that range" in description.lower() or "price at the start" in description.lower():
                 try:
                     end_dt = pd.Timestamp(event['endDate'])
+                    if end_dt.tz is None:
+                        end_dt = end_dt.tz_localize('UTC')
                     start_dt = end_dt - pd.Timedelta(minutes=TradingConstants.MARKET_DURATION_MINUTES)
                     now = pd.Timestamp.now(tz='UTC')
                     
+                    logger.debug(f"Dynamic strike detected: Market start={start_dt}, End={end_dt}, Now={now}")
+                    
                     if start_dt < now:
-                        return self.get_btc_price_at(start_dt)
+                        # For dynamic strikes, we need Chainlink price at market start time
+                        # This will be handled by the core using RTDS historical data
+                        # Return "Dynamic" to signal that core should look it up
+                        logger.debug(f"Dynamic strike detected - will be resolved by RTDS historical lookup")
+                        return "Dynamic"
                     else:
+                        logger.debug("Market hasn't started yet, strike pending")
                         return "Pending"
                 except Exception as e:
-                    logger.error(f"Error fetching dynamic strike: {e}")
-                    return "N/A"
+                    logger.error(f"Error fetching dynamic strike: {e}", exc_info=True)
         
+        # Strategy 5: Check outcomes array for strike info
+        outcomes = market.get('outcomes', [])
+        if outcomes:
+            for outcome in outcomes:
+                outcome_title = outcome.get('title', '')
+                if outcome_title:
+                    match = re.search(r'>\s*\$?([0-9,.]+)', outcome_title)
+                    if match:
+                        return match.group(1).replace(',', '')
+        
+        # Log what we found for debugging
+        logger.warning(f"Could not extract strike price from market data")
+        logger.debug(f"Market data sample: {json.dumps({k: v for k, v in list(market.items())[:10]}, default=str)}")
         return "N/A"
     
     def _build_token_map(self, market: Dict[str, Any], clob_token_ids: List[str]) -> Dict[str, str]:
@@ -689,7 +783,63 @@ class PolymarketConnector(DataConnector):
             valid_events.sort(key=lambda x: pd.Timestamp(x['endDate']))
             target_event = valid_events[0]
             
-            return self._parse_market_data(target_event, include_token_map=True)
+            # Try to get more detailed market data that might have the actual strike
+            market_data = self._parse_market_data(target_event, include_token_map=True)
+            
+            # If we have a market_id, try to fetch detailed market info
+            # Also check if there's a resolution endpoint that has the strike
+            if market_data and market_data.get('market_id'):
+                try:
+                    # Try the market details endpoint
+                    detailed_market = self.get_market_data(market_data['market_id'])
+                    if detailed_market:
+                        # Check if detailed market has better strike info
+                        if isinstance(detailed_market, dict):
+                            # Check groupItemThreshold in detailed market (might be populated after market starts)
+                            if 'markets' in detailed_market and len(detailed_market['markets']) > 0:
+                                detailed_market_obj = detailed_market['markets'][0]
+                                threshold = detailed_market_obj.get('groupItemThreshold')
+                                if threshold and threshold != 0 and threshold != "0":
+                                    try:
+                                        threshold_val = float(threshold)
+                                        if threshold_val > 0:
+                                            logger.info(f"Found strike in detailed market groupItemThreshold: {threshold_val:,.2f}")
+                                            market_data['strike_price'] = f"{threshold_val:,.2f}"
+                                            return market_data
+                                    except (ValueError, TypeError):
+                                        pass
+                            
+                            detailed_strike = self._extract_strike_price(
+                                detailed_market.get('markets', [{}])[0] if detailed_market.get('markets') else detailed_market,
+                                detailed_market if 'endDate' in detailed_market else target_event
+                            )
+                            if detailed_strike and detailed_strike != "N/A":
+                                logger.info(f"Found strike from detailed market data: {detailed_strike}")
+                                market_data['strike_price'] = detailed_strike
+                    
+                    # Also try querying the market's resolution endpoint if it exists
+                    # Some markets might expose the strike via a resolution query
+                    try:
+                        resolution_url = f"{self.gamma_url}/markets/{market_data['market_id']}/resolution"
+                        resolution_response = self.session.get(
+                            resolution_url, timeout=NetworkConstants.REQUEST_TIMEOUT
+                        )
+                        if resolution_response.status_code == 200:
+                            resolution_data = resolution_response.json()
+                            # Check if resolution data contains strike
+                            strike = (resolution_data.get('strike') or 
+                                    resolution_data.get('threshold') or
+                                    resolution_data.get('price'))
+                            if strike:
+                                logger.info(f"Found strike from resolution endpoint: {strike}")
+                                market_data['strike_price'] = str(strike)
+                    except Exception as e:
+                        logger.debug(f"Resolution endpoint check failed (may not exist): {e}")
+                        
+                except Exception as e:
+                    logger.debug(f"Could not fetch detailed market data: {e}")
+            
+            return market_data
             
         except requests.RequestException as e:
             logger.error(f"Error fetching active market: {e}")
@@ -766,6 +916,109 @@ class PolymarketConnector(DataConnector):
         except (requests.RequestException, KeyError, ValueError) as e:
             logger.error(f"Error fetching BTC price from Binance: {e}")
             return 0.0
+    
+    def get_chainlink_price_at(self, timestamp: pd.Timestamp) -> Optional[float]:
+        """
+        Fetch Chainlink BTC/USD price at a specific timestamp.
+        
+        Uses Chainlink Data Streams API to get historical prices.
+        Based on: https://data.chain.link/streams/btc-usd
+        
+        Args:
+            timestamp: Timestamp to fetch price for
+            
+        Returns:
+            Chainlink BTC/USD price as float or None if unavailable
+        """
+        try:
+            # Chainlink Data Streams API for BTC/USD
+            # The stream ID for BTC/USD is typically available via their streams API
+            # Try multiple approaches to get the price
+            
+            # Approach 1: Query the streams endpoint for BTC/USD
+            streams_url = "https://data.chain.link/v1/streams"
+            try:
+                streams_response = self.session.get(
+                    streams_url, timeout=NetworkConstants.REQUEST_TIMEOUT
+                )
+                if streams_response.status_code == 200:
+                    streams_data = streams_response.json()
+                    # Find BTC/USD stream
+                    btc_stream = None
+                    if isinstance(streams_data, list):
+                        btc_stream = next(
+                            (s for s in streams_data if 'btc' in str(s.get('id', '')).lower() and 'usd' in str(s.get('id', '')).lower()),
+                            None
+                        )
+                    
+                    if btc_stream:
+                        stream_id = btc_stream.get('id')
+                        # Query historical data for this stream
+                        timestamp_ms = int(timestamp.timestamp() * 1000)
+                        data_url = f"https://data.chain.link/v1/streams/{stream_id}/data"
+                        params = {
+                            'timestamp': timestamp_ms,
+                            'limit': 1
+                        }
+                        data_response = self.session.get(
+                            data_url, params=params, timeout=NetworkConstants.REQUEST_TIMEOUT
+                        )
+                        if data_response.status_code == 200:
+                            data = data_response.json()
+                            if isinstance(data, dict) and 'data' in data:
+                                price = data['data'].get('price') or data['data'].get('value')
+                                if price:
+                                    logger.info(f"Found Chainlink price from streams API: {price}")
+                                    return float(price)
+            except Exception as e:
+                logger.debug(f"Streams API approach failed: {e}")
+            
+            # Approach 2: Direct query to BTC/USD feed (if we know the feed address)
+            # Chainlink BTC/USD feed on Polygon: 0x34bB4e028b3d2Be6B97F6e75e68492b891C5fF15
+            # But we need to query via their API, not directly
+            
+            # Approach 3: Try the data.chain.link query endpoint
+            timestamp_ms = int(timestamp.timestamp() * 1000)
+            query_url = "https://data.chain.link/v1/queries"
+            # Try with different parameter formats
+            for param_format in [
+                {'stream': 'btc-usd', 'timestamp': timestamp_ms},
+                {'feed': 'btc-usd', 'timestamp': timestamp_ms},
+                {'symbol': 'btc/usd', 'timestamp': timestamp_ms},
+            ]:
+                try:
+                    query_response = self.session.get(
+                        query_url, params=param_format, timeout=NetworkConstants.REQUEST_TIMEOUT
+                    )
+                    if query_response.status_code == 200:
+                        query_data = query_response.json()
+                        # Try various response formats
+                        price = None
+                        if isinstance(query_data, dict):
+                            price = (query_data.get('price') or 
+                                   query_data.get('value') or
+                                   query_data.get('data', {}).get('price') or
+                                   query_data.get('data', {}).get('value'))
+                        elif isinstance(query_data, list) and len(query_data) > 0:
+                            price = (query_data[0].get('price') or 
+                                   query_data[0].get('value'))
+                        
+                        if price:
+                            logger.info(f"Found Chainlink price from query API: {price}")
+                            return float(price)
+                except Exception as e:
+                    logger.debug(f"Query format {param_format} failed: {e}")
+                    continue
+            
+            logger.debug(f"All Chainlink API approaches failed for timestamp {timestamp}")
+            return None
+            
+        except requests.RequestException as e:
+            logger.debug(f"Error fetching Chainlink historical price: {e}")
+            return None
+        except (KeyError, ValueError, TypeError) as e:
+            logger.debug(f"Error parsing Chainlink price: {e}")
+            return None
     
     def get_btc_price_at(self, timestamp: pd.Timestamp) -> str:
         """

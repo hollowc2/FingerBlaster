@@ -223,6 +223,9 @@ def run_textual_app():
             self.title = "FINGER BLASTER v2.0 (Cockpit Mode)"
             self.core.log_msg("Ready to Blast. Initializing...")
             
+            # Start RTDS early for real-time BTC prices matching Polymarket
+            await self.core.start_rtds()
+            
             # Check and add prior outcomes if app was off (after a delay to let market initialize)
             self.set_timer(3.0, lambda: asyncio.create_task(self.core._check_and_add_prior_outcomes()))
             

@@ -22,7 +22,10 @@ import pandas as pd
 
 from connectors.polymarket import PolymarketConnector
 from src.config import AppConfig
-from src.engine import MarketDataManager, HistoryManager, WebSocketManager, OrderExecutor
+from src.engine import (
+    MarketDataManager, HistoryManager, WebSocketManager, 
+    OrderExecutor, RTDSManager
+)
 
 logger = logging.getLogger("FingerBlaster")
 
@@ -183,6 +186,11 @@ class FingerBlasterCore:
             self.market_manager,
             self._on_ws_message
         )
+        # RTDS manager for real-time BTC prices matching Polymarket
+        self.rtds_manager = RTDSManager(
+            self.config,
+            self._on_rtds_btc_price
+        )
         
         # State
         self.resolution_shown = False
@@ -196,6 +204,10 @@ class FingerBlasterCore:
         self.avg_entry_price_yes: Optional[float] = None
         self.avg_entry_price_no: Optional[float] = None
         
+        # Chainlink price tracking for dynamic strikes
+        # Maps market_start_time -> Chainlink BTC price at that time
+        self.chainlink_prices_at_start: Dict[str, float] = {}
+        
         # Callback management
         self.callback_manager = CallbackManager()
         
@@ -205,7 +217,18 @@ class FingerBlasterCore:
         self._cache_ttl: float = 0.1  # 100ms cache
         
         # Load prior outcomes
-        self._load_prior_outcomes()
+    
+    async def start_rtds(self) -> None:
+        """Start RTDS for real-time BTC prices.
+        
+        This should be called early to ensure accurate prices matching Polymarket.
+        Can be called independently of market status.
+        """
+        try:
+            await self.rtds_manager.start()
+            logger.info("RTDS started for real-time BTC prices")
+        except Exception as e:
+            logger.error(f"Error starting RTDS: {e}", exc_info=True)
     
     def register_callback(self, event: str, callback: Callable) -> bool:
         """Register a callback for a specific event.
@@ -290,6 +313,34 @@ class FingerBlasterCore:
         """
         await self._recalc_price()
     
+    async def _on_rtds_btc_price(self, btc_price: float) -> None:
+        """Handle RTDS BTC price update.
+        
+        This uses the same price source as Polymarket for accurate resolution.
+        
+        Args:
+            btc_price: BTC price from RTDS
+        """
+        try:
+            if btc_price and isinstance(btc_price, (int, float)) and btc_price > 0:
+                btc_price = float(btc_price)
+                await self.history_manager.add_btc_price(btc_price)
+                
+                # Emit BTC price update
+                self._emit('btc_price_update', btc_price)
+                
+                # Emit BTC chart update
+                prices = await self.history_manager.get_btc_history()
+                if len(prices) >= 2:
+                    market = await self.market_manager.get_market()
+                    strike_val = None
+                    if market:
+                        strike_str = str(market.get('strike_price', ''))
+                        strike_val = self._parse_strike(strike_str)
+                    self._emit('chart_update', prices, strike_val, 'btc')
+        except Exception as e:
+            logger.error(f"Error handling RTDS BTC price: {e}", exc_info=True)
+    
     async def _recalc_price(self) -> None:
         """Recalculate mid price and update UI with caching.
         
@@ -341,16 +392,79 @@ class FingerBlasterCore:
                     self.connector.get_active_market
                 )
                 if new_market:
-                    success = await self.market_manager.set_market(new_market)
-                    if success:
-                        await self.history_manager.clear_yes_history()
+                        success = await self.market_manager.set_market(new_market)
+                        if success:
+                            await self.history_manager.clear_yes_history()
+                            strike = str(new_market.get('strike_price', 'N/A'))
+                            
+                            # For dynamic strikes, use RTDS to get Chainlink price at market start
+                            market_start_time = await self.market_manager.get_market_start_time()
+                            if strike == "Dynamic" and market_start_time:
+                                # Try to get Chainlink price from RTDS historical data
+                                chainlink_price = self.rtds_manager.get_chainlink_price_at(market_start_time)
+                                if chainlink_price and chainlink_price > 0:
+                                    strike = f"{chainlink_price:,.2f}"
+                                    self.log_msg(
+                                        f"Dynamic strike: Using RTDS Chainlink price at market start ({market_start_time}): ${chainlink_price:,.2f}"
+                                    )
+                                    # Update market with correct strike
+                                    new_market['strike_price'] = strike
+                                    await self.market_manager.set_market(new_market)
+                                else:
+                                    # Fallback: try connector's Chainlink API
+                                    chainlink_price = await asyncio.to_thread(
+                                        self.connector.get_chainlink_price_at, market_start_time
+                                    )
+                                    if chainlink_price and chainlink_price > 0:
+                                        strike = f"{chainlink_price:,.2f}"
+                                        self.log_msg(
+                                            f"Dynamic strike: Using Chainlink API price at market start: ${chainlink_price:,.2f}"
+                                        )
+                                        new_market['strike_price'] = strike
+                                        await self.market_manager.set_market(new_market)
+                                    else:
+                                        # Final fallback: Binance
+                                        price_str = await asyncio.to_thread(
+                                            self.connector.get_btc_price_at, market_start_time
+                                        )
+                                        if price_str and price_str != "N/A":
+                                            strike = price_str
+                                            self.log_msg(
+                                                f"WARNING: Dynamic strike using Binance fallback (Chainlink not available): ${strike}"
+                                            )
+                                            new_market['strike_price'] = strike
+                                            await self.market_manager.set_market(new_market)
+                                        else:
+                                            self.log_msg(
+                                                f"WARNING: Could not determine dynamic strike price. Using current Chainlink price."
+                                            )
+                                            current_chainlink = self.rtds_manager.get_chainlink_price()
+                                            if current_chainlink:
+                                                strike = f"{current_chainlink:,.2f}"
+                                                new_market['strike_price'] = strike
+                                                await self.market_manager.set_market(new_market)
+                        
                         self.log_msg(
-                            f"Market Found: {new_market.get('strike_price', 'N/A')}"
+                            f"Market Found: Strike={strike}, End={new_market.get('end_date', 'N/A')}"
                         )
+                        
+                        # Log current BTC prices for comparison
+                        chainlink_price = self.rtds_manager.get_chainlink_price()
+                        rtds_price = self.rtds_manager.get_current_price()
+                        if chainlink_price:
+                            self.log_msg(f"RTDS Chainlink BTC/USD: ${chainlink_price:,.2f}")
+                        if rtds_price and rtds_price != chainlink_price:
+                            self.log_msg(f"RTDS Binance BTC/USDT: ${rtds_price:,.2f}")
+                        if not rtds_price:
+                            binance_price = await asyncio.to_thread(self.connector.get_btc_price)
+                            if binance_price:
+                                self.log_msg(f"Binance API BTC Price: ${binance_price:,.2f}")
+                        
                         await self.ws_manager.start()
+                        # Start RTDS for real-time BTC prices
+                        await self.rtds_manager.start()
                         
                         # Emit market update
-                        strike = str(new_market.get('strike_price', 'N/A'))
                         ends = self._format_ends(new_market.get('end_date', 'N/A'))
                         self._emit('market_update', strike, ends)
                         
@@ -369,9 +483,19 @@ class FingerBlasterCore:
     async def update_btc_price(self) -> None:
         """Update BTC price and refresh chart.
         
-        Improved error handling.
+        Now uses RTDS for real-time prices matching Polymarket.
+        Falls back to Binance API if RTDS is not available.
         """
         try:
+            # Try RTDS first (matches Polymarket's price source)
+            rtds_price = self.rtds_manager.get_current_price()
+            if rtds_price and rtds_price > 0:
+                # RTDS is handling updates via callback, just log
+                logger.debug(f"Using RTDS BTC price: ${rtds_price:,.2f}")
+                return
+            
+            # Fallback to Binance API if RTDS not available
+            logger.debug("RTDS price not available, falling back to Binance API")
             price = await asyncio.to_thread(self.connector.get_btc_price)
             if price and isinstance(price, (int, float)) and price > 0:
                 btc_price = float(price)
@@ -486,15 +610,30 @@ class FingerBlasterCore:
             logger.error(f"Error checking market expiry: {e}", exc_info=True)
     
     async def _show_resolution(self) -> None:
-        """Calculate and emit resolution with improved error handling."""
+        """Calculate and emit resolution with improved error handling.
+        
+        Uses RTDS BTC price for accurate resolution matching Polymarket.
+        """
         try:
             market = await self.market_manager.get_market()
             if not market:
                 return
             
-            # Get BTC price from latest history
-            btc_history = await self.history_manager.get_btc_history()
-            btc_price = btc_history[-1] if btc_history else 0.0
+            # Get BTC price - prefer RTDS (matches Polymarket), fallback to history
+            btc_price = None
+            rtds_price = self.rtds_manager.get_current_price()
+            if rtds_price and rtds_price > 0:
+                btc_price = rtds_price
+                logger.info(f"Using RTDS price for resolution: ${btc_price:,.2f}")
+            else:
+                # Fallback to history
+                btc_history = await self.history_manager.get_btc_history()
+                btc_price = btc_history[-1] if btc_history else 0.0
+                logger.info(f"Using history price for resolution: ${btc_price:,.2f}")
+            
+            if btc_price <= 0:
+                logger.error("Invalid BTC price for resolution")
+                return
             
             strike_str = str(market.get('strike_price', '')).replace(',', '').replace('$', '').strip()
             
@@ -506,6 +645,7 @@ class FingerBlasterCore:
                     logger.warning(f"Could not parse strike price: {strike_str}")
                     resolution = "YES"  # Default fallback
             else:
+                logger.warning("Strike price not available, defaulting to YES")
                 resolution = "YES"
             
             self.last_resolution = resolution
@@ -531,6 +671,7 @@ class FingerBlasterCore:
             await self.market_manager.clear_market()
             await self.history_manager.clear_yes_history()
             await self.ws_manager.stop()
+            # Note: Keep RTDS running for next market
             self.resolution_shown = False
             self._emit('resolution', None)  # Hide overlay
         except Exception as e:
@@ -916,6 +1057,12 @@ class FingerBlasterCore:
             await self.ws_manager.stop()
         except Exception as e:
             logger.error(f"Error stopping WebSocket: {e}")
+        
+        try:
+            # Stop RTDS
+            await self.rtds_manager.stop()
+        except Exception as e:
+            logger.error(f"Error stopping RTDS: {e}")
         
         try:
             # Clear all callbacks
