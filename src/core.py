@@ -14,7 +14,7 @@ import logging
 import os
 import time
 import threading
-from collections.abc import Callable, Awaitable
+from collections.abc import Callable
 from datetime import datetime
 from typing import Optional, Dict, List, Any, Tuple
 
@@ -204,10 +204,6 @@ class FingerBlasterCore:
         self.avg_entry_price_yes: Optional[float] = None
         self.avg_entry_price_no: Optional[float] = None
         
-        # Chainlink price tracking for dynamic strikes
-        # Maps market_start_time -> Chainlink BTC price at that time
-        self.chainlink_prices_at_start: Dict[str, float] = {}
-        
         # Callback management
         self.callback_manager = CallbackManager()
         
@@ -217,6 +213,10 @@ class FingerBlasterCore:
         self._cache_ttl: float = 0.1  # 100ms cache
         
         # Load prior outcomes
+        try:
+            self._load_prior_outcomes()
+        except Exception as exc:
+            logger.warning("Could not load prior outcomes: %s", exc)
     
     async def start_rtds(self) -> None:
         """Start RTDS for real-time BTC prices.
@@ -650,17 +650,14 @@ class FingerBlasterCore:
                 return
             
             strike_str = str(market.get('strike_price', '')).replace(',', '').replace('$', '').strip()
-            
-            if strike_str and strike_str != "N/A":
-                try:
-                    strike_val = float(strike_str)
-                    resolution = "YES" if btc_price >= strike_val else "NO"
-                except (ValueError, TypeError):
-                    logger.warning(f"Could not parse strike price: {strike_str}")
-                    resolution = "YES"  # Default fallback
-            else:
-                logger.warning("Strike price not available, defaulting to YES")
-                resolution = "YES"
+            strike_val = self._parse_strike(strike_str)
+
+            if strike_val is None:
+                logger.warning("Strike unavailable or unparseable (%s); resolution deferred", strike_str)
+                self._emit('resolution', None)
+                return
+
+            resolution = "YES" if btc_price >= strike_val else "NO"
             
             self.last_resolution = resolution
             direction = "UP" if resolution == "YES" else "DOWN"

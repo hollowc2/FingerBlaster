@@ -1,10 +1,12 @@
 """PyQt6 desktop UI entry point for FingerBlaster application."""
 
 import asyncio
+import copy
 import logging
 import os
 import sys
 import threading
+import time
 from typing import Optional
 
 # Set Qt platform plugin path before importing Qt
@@ -30,9 +32,8 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextEdit, QSplitter, QLabel, QDialog, QScrollArea
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject, pyqtSlot
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QMetaObject, pyqtSlot, QEvent
 from PyQt6.QtGui import QKeySequence, QShortcut, QKeyEvent
-from PyQt6.QtCore import QEvent
 
 from src.core import FingerBlasterCore
 from src.config import AppConfig
@@ -62,7 +63,6 @@ def setup_qt_asyncio():
         _qt_event_loop_thread = threading.Thread(target=run_event_loop, daemon=True)
         _qt_event_loop_thread.start()
         # Wait a bit for the loop to start
-        import time
         time.sleep(0.1)
 
 
@@ -72,7 +72,6 @@ def run_async_task(coro):
     if _qt_event_loop is None:
         setup_qt_asyncio()
         # Wait a bit more for the loop to be ready
-        import time
         time.sleep(0.2)
     
     if _qt_event_loop and _qt_event_loop.is_running():
@@ -97,7 +96,7 @@ class UIUpdateSignals(QObject):
     market_ends = pyqtSignal(str)
     btc_price = pyqtSignal(float)
     prices = pyqtSignal(float, float, str, str)
-    account_stats = pyqtSignal(float, float, float, float)
+    account_stats = pyqtSignal(float, float, float, float, float, float)  # balance, yes_bal, no_bal, size, avg_yes, avg_no
     countdown = pyqtSignal(str)
     prior_outcomes = pyqtSignal(str)
     resolution_show = pyqtSignal(str)
@@ -160,19 +159,6 @@ class FingerBlasterPyQtApp(QMainWindow):
                 self.core._emit('chart_update', prices, strike_val, 'btc')
         except Exception as e:
             logger.error(f"Error forcing chart updates: {e}", exc_info=True)
-    
-    def _connect_signals(self):
-        """Connect signals to UI update methods."""
-        self.signals.market_strike.connect(self.market_panel.update_strike)
-        self.signals.market_ends.connect(self.market_panel.update_ends)
-        self.signals.btc_price.connect(self.market_panel.update_btc_price)
-        self.signals.prices.connect(self.price_panel.update_prices)
-        self.signals.account_stats.connect(self.stats_panel.update_stats)
-        self.signals.countdown.connect(self.market_panel.update_time_left)
-        self.signals.prior_outcomes.connect(self.market_panel.update_prior_outcomes)
-        self.signals.resolution_show.connect(self._show_resolution_slot)
-        self.signals.resolution_hide.connect(self.resolution_overlay.hide_resolution)
-        self.signals.log_message.connect(self._update_log_slot)
     
     def init_ui(self):
         """Initialize the UI."""
@@ -471,7 +457,10 @@ class FingerBlasterPyQtApp(QMainWindow):
         """Handle account stats update from core."""
         # Always use the current selected_size from core to ensure accuracy
         current_size = self.core.selected_size
-        self.signals.account_stats.emit(balance, yes_balance, no_balance, current_size)
+        # Emit signal with all parameters including average entry prices
+        avg_yes = avg_entry_price_yes if avg_entry_price_yes is not None else 0.0
+        avg_no = avg_entry_price_no if avg_entry_price_no is not None else 0.0
+        self.signals.account_stats.emit(balance, yes_balance, no_balance, current_size, avg_yes, avg_no)
     
     def _on_countdown_update_sync(self, time_str: str):
         """Handle countdown update from core."""
@@ -516,7 +505,6 @@ class FingerBlasterPyQtApp(QMainWindow):
         try:
             if len(args) == 3 and args[2] == 'btc':
                 # BTC chart update - store data and invoke update method
-                import copy
                 self._pending_btc_data = (copy.deepcopy(args[0]) if args[0] else [], args[1])
                 # Use invokeMethod to ensure main thread execution
                 QMetaObject.invokeMethod(
@@ -525,7 +513,6 @@ class FingerBlasterPyQtApp(QMainWindow):
                 )
             elif len(args) >= 1:
                 # Price chart update - store data and invoke update method
-                import copy
                 self._pending_probability_data = copy.deepcopy(args[0]) if args[0] else []
                 # Use invokeMethod to ensure main thread execution
                 QMetaObject.invokeMethod(

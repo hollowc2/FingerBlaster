@@ -8,11 +8,9 @@ import time
 import hmac
 import hashlib
 import base64
-import traceback
 import urllib.parse
 from decimal import Decimal, ROUND_DOWN
 from typing import Optional, Dict, List, Any, Tuple
-from collections import deque
 
 import pandas as pd
 import requests

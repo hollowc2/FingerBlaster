@@ -397,7 +397,7 @@ class WebSocketManager:
         self.on_message = on_message
         self.shutdown_flag = asyncio.Event()
         self.connection_task: Optional[asyncio.Task] = None
-        self._ws: Optional[websockets.WebSocketServerProtocol] = None
+        self._ws: Optional[websockets.WebSocketClientProtocol] = None
     
     async def start(self) -> None:
         """Start WebSocket connection."""
@@ -660,7 +660,9 @@ class OrderExecutor:
         
         target_token_id = token_map[side]
         try:
-            resp = self.connector.create_market_order(target_token_id, size, 'BUY')
+            resp = await asyncio.to_thread(
+                self.connector.create_market_order, target_token_id, size, 'BUY'
+            )
             if resp and isinstance(resp, dict) and resp.get('orderID'):
                 return resp
             else:
@@ -680,7 +682,7 @@ class OrderExecutor:
             List of order responses
         """
         try:
-            results = self.connector.flatten_market(token_map)
+            results = await asyncio.to_thread(self.connector.flatten_market, token_map)
             return results if results else []
         except Exception as e:
             logger.error(f"Flatten error: {e}", exc_info=True)
@@ -693,8 +695,8 @@ class OrderExecutor:
             True if successful, False otherwise
         """
         try:
-            self.connector.cancel_all_orders()
-            return True
+            result = await asyncio.to_thread(self.connector.cancel_all_orders)
+            return bool(result)
         except Exception as e:
             logger.error(f"Cancel all error: {e}", exc_info=True)
             return False
@@ -728,7 +730,7 @@ class RTDSManager:
         self.on_btc_price = on_btc_price
         self.shutdown_flag = asyncio.Event()
         self.connection_task: Optional[asyncio.Task] = None
-        self._ws: Optional[websockets.WebSocketServerProtocol] = None
+        self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self.current_btc_price: Optional[float] = None
         self.current_chainlink_price: Optional[float] = None  # Track Chainlink separately
         # Store historical Chainlink prices with timestamps for strike price lookup

@@ -231,11 +231,24 @@ class StatsPanel(QFrame):
         layout.addStretch()
         self.setLayout(layout)
     
-    def update_stats(self, balance: float, yes_balance: float, no_balance: float, size: float):
+    def update_stats(self, balance: float, yes_balance: float, no_balance: float, size: float,
+                     avg_entry_price_yes: float = 0.0, avg_entry_price_no: float = 0.0):
         """Update account statistics."""
         self.balance_label.setText(f"CASH: ${balance:.2f}")
         self.size_label.setText(f"SIZE: ${size:.2f}")
-        self.pos_label.setText(f"POS: Y:{yes_balance:.1f} | N:{no_balance:.1f}")
+        
+        # Format positions with average entry prices if available
+        yes_pos_str = f"Y:{yes_balance:.1f}"
+        if yes_balance > 0 and avg_entry_price_yes > 0:
+            yes_price_cents = int(avg_entry_price_yes * 100)
+            yes_pos_str += f" @{yes_price_cents}c"
+        
+        no_pos_str = f"N:{no_balance:.1f}"
+        if no_balance > 0 and avg_entry_price_no > 0:
+            no_price_cents = int(avg_entry_price_no * 100)
+            no_pos_str += f" @{no_price_cents}c"
+        
+        self.pos_label.setText(f"POS: {yes_pos_str} | {no_pos_str}")
     
     def update_size_only(self, size: float):
         """Update only the size display immediately."""
