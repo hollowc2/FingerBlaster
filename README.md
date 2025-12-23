@@ -21,7 +21,7 @@ A high-performance trading interface for Polymarket's "BTC Up or Down 15m" marke
   - Live BTC price with delta calculation
   - Prior outcomes tracking (shows consecutive market results)
 - **Resolution Overlay**: Visual notification when markets resolve
-- **Account Statistics**: Real-time balance, YES/NO positions, and order size display
+- **Account Statistics**: Real-time balance, YES/NO positions with average entry prices, and order size display
 
 ### Architecture
 - **Modular Design**: Shared core logic (`FingerBlasterCore`) used by both UIs
@@ -135,17 +135,18 @@ Both UI modes support the same keyboard shortcuts:
 | `Q` / `q` | Quit application |
 
 ### Desktop UI Additional Features
-- **Help Dialog**: Click the "? HELP" button or press `?` to view keyboard shortcuts
+- **Help Dialog**: Click the "HELP" button to view keyboard shortcuts
 - **Button Interface**: All actions available via clickable buttons
 - **Resizable Windows**: Adjust window size to your preference
+- **Average Entry Prices**: Displays average entry prices for positions in the format "Y:10.0 @45c" (10 shares at 45 cents average)
 
 ## ⚙️ Configuration
 
 The application automatically:
 - Discovers active "BTC Up or Down 15m" markets
 - Connects to WebSocket for real-time price updates
-- Updates account balances and positions every 10 seconds
-- Updates BTC price every 3 seconds
+- Updates account balances, positions, and average entry prices every 10 seconds
+- Updates BTC price via RTDS in real-time (Chainlink prices matching Polymarket resolution)
 - Updates market status every 5 seconds
 - Tracks prior market outcomes with timestamps (last 10 consecutive markets)
 - Shows resolution overlay when markets expire
@@ -197,7 +198,13 @@ The application creates a `data/` directory containing:
    - Flattens positions
    - Cancels pending orders
 
-6. **UI Components**:
+6. **RTDSManager**: Real-time data stream for crypto prices
+   - Connects to Polymarket's RTDS WebSocket for BTC prices
+   - Provides Chainlink BTC/USD prices (matches Polymarket's resolution source)
+   - Falls back to Binance API if RTDS unavailable
+   - Maintains historical price data for dynamic strike price resolution
+
+7. **UI Components**:
    - **Terminal UI** (`main.py`, `src/ui.py`): Textual-based interface
    - **Desktop UI** (`main_pyqt.py`, `src/ui_pyqt.py`): PyQt6-based interface
 
@@ -233,6 +240,18 @@ When a market expires, a full-screen overlay appears showing:
 
 The overlay displays for 3 seconds before the application searches for the next market.
 
+### Account Statistics
+
+The Account Statistics panel displays:
+- **Cash Balance**: Current USDC balance available for trading
+- **Order Size**: Current order size setting (adjustable with +/- keys)
+- **Positions**: 
+  - YES position: Number of YES shares held
+  - NO position: Number of NO shares held
+  - **Average Entry Price**: For each position, displays the weighted average entry price in cents (e.g., "Y:10.0 @45c" means 10 YES shares purchased at an average of 45 cents)
+
+Average entry prices are calculated using weighted averages when adding to existing positions and reset when positions are flattened.
+
 ### Charts
 
 **Probability Chart**: Shows YES price history over the market duration with:
@@ -248,9 +267,9 @@ The overlay displays for 3 seconds before the application searches for the next 
 ### Real-time Updates
 
 - **Price Updates**: Via WebSocket, updates as order book changes
-- **BTC Price**: Updates every 3 seconds from Binance API
+- **BTC Price**: Updates via RTDS (Real Time Data Stream) using Chainlink prices (matches Polymarket resolution), falls back to Binance API every 3 seconds
 - **Countdown**: Updates every 200ms for smooth ticking
-- **Account Stats**: Updates every 10 seconds
+- **Account Stats**: Updates every 10 seconds (includes average entry prices for positions)
 - **Market Status**: Checks for new markets every 5 seconds
 
 ## 🔧 Troubleshooting
@@ -278,12 +297,13 @@ If the desktop UI fails to launch:
 
 ## 📝 Notes
 
-- The application uses Binance API for BTC price reference (same as Polymarket)
-- Market orders use aggressive pricing (10% above/below mid) to ensure fills
-- Order size defaults to $1.00 and can be adjusted with +/- keys
-- Rate limiting: 0.5 seconds between orders to prevent API throttling
-- Prior outcomes are stored with timestamps for accurate consecutive market matching
-- Both UI modes share the same core logic, ensuring consistent behavior
+- **BTC Price Source**: The application uses RTDS (Real Time Data Stream) to get Chainlink BTC/USD prices, which matches Polymarket's internal price source for market resolution. Falls back to Binance API if RTDS is unavailable.
+- **Average Entry Prices**: The application tracks and displays average entry prices for YES and NO positions, shown in cents (e.g., "Y:10.0 @45c" means 10 shares at 45 cents average entry price).
+- **Market Orders**: Use aggressive pricing (10% above/below mid) to ensure fills
+- **Order Size**: Defaults to $1.00 and can be adjusted with +/- keys
+- **Rate Limiting**: 0.5 seconds between orders to prevent API throttling
+- **Prior Outcomes**: Stored with timestamps for accurate consecutive market matching
+- **UI Consistency**: Both UI modes share the same core logic, ensuring consistent behavior
 
 ## 🔒 Security
 
