@@ -64,16 +64,18 @@ class PricePanel(Vertical):
     
     yes_price = reactive(0.0)
     no_price = reactive(0.0)
-    spread = reactive("0.000 / 0.000")
+    yes_spread = reactive("0.000 / 0.000")
+    no_spread = reactive("0.000 / 0.000")
     
     def compose(self):
         """Compose the price panel UI."""
         yield Label("LIVE PRICES", classes="title")
+        yield Label("SPREAD: 0.00 / 0.00", id="yes_spread_label", classes="spread_label")
         yield Label("YES", classes="price_label")
         yield Center(Digits("0.00", id="yes_digits", classes="price_yes"))
         yield Label("NO", classes="price_label")
         yield Center(Digits("0.00", id="no_digits", classes="price_no"))
-        yield Label("SPREAD: 0.00 / 0.00", id="spread_label", classes="spread_label")
+        yield Label("SPREAD: 0.00 / 0.00", id="no_spread_label", classes="spread_label")
     
     def watch_yes_price(self, value: float) -> None:
         """Update YES price display."""
@@ -91,13 +93,21 @@ class PricePanel(Vertical):
         except Exception as e:
             logger.debug(f"Error updating NO price: {e}")
     
-    def watch_spread(self, value: str) -> None:
-        """Update spread display."""
+    def watch_yes_spread(self, value: str) -> None:
+        """Update YES spread display."""
         try:
-            label = self.query_one("#spread_label", Label)
+            label = self.query_one("#yes_spread_label", Label)
             label.update(f"SPREAD: {value}")
         except Exception as e:
-            logger.debug(f"Error updating spread: {e}")
+            logger.debug(f"Error updating YES spread: {e}")
+    
+    def watch_no_spread(self, value: str) -> None:
+        """Update NO spread display."""
+        try:
+            label = self.query_one("#no_spread_label", Label)
+            label.update(f"SPREAD: {value}")
+        except Exception as e:
+            logger.debug(f"Error updating NO spread: {e}")
 
 
 class StatsPanel(Static):

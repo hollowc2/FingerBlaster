@@ -152,6 +152,12 @@ class PricePanel(QFrame):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
+        # YES Spread
+        self.yes_spread_label = QLabel("SPREAD: 0.00 / 0.00")
+        self.yes_spread_label.setStyleSheet("color: #888888; font-size: 10pt;")
+        self.yes_spread_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.yes_spread_label)
+        
         # YES Price
         yes_label = QLabel("YES")
         yes_label.setStyleSheet("font-weight: bold; font-size: 11pt;")
@@ -174,20 +180,21 @@ class PricePanel(QFrame):
         self.no_price_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.no_price_label)
         
-        # Spread
-        self.spread_label = QLabel("SPREAD: 0.00 / 0.00")
-        self.spread_label.setStyleSheet("color: #888888; font-size: 10pt;")
-        self.spread_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.spread_label)
+        # NO Spread
+        self.no_spread_label = QLabel("SPREAD: 0.00 / 0.00")
+        self.no_spread_label.setStyleSheet("color: #888888; font-size: 10pt;")
+        self.no_spread_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.no_spread_label)
         
         layout.addStretch()
         self.setLayout(layout)
     
-    def update_prices(self, yes_price: float, no_price: float, spread: str):
+    def update_prices(self, yes_price: float, no_price: float, yes_spread: str, no_spread: str):
         """Update price displays."""
         self.yes_price_label.setText(f"{yes_price:.2f}")
         self.no_price_label.setText(f"{no_price:.2f}")
-        self.spread_label.setText(f"SPREAD: {spread}")
+        self.yes_spread_label.setText(f"SPREAD: {yes_spread}")
+        self.no_spread_label.setText(f"SPREAD: {no_spread}")
 
 
 class StatsPanel(QFrame):
@@ -249,10 +256,12 @@ class ProbabilityChart(QWidget):
         self.ax = self.figure.add_subplot(111, facecolor='black')
         self.ax.set_xlim(1, 15)
         self.ax.set_ylim(0, 1.0)
-        self.ax.set_xticks(range(1, 16))  # 1-15 minutes, 1 minute increments
-        self.ax.set_xlabel('Time (minutes)', color='white')
+        self.ax.set_xlabel('', color='white')
         self.ax.set_ylabel('Probability', color='white')
         self.ax.tick_params(colors='white')
+        # Remove x-axis ticks and labels
+        self.ax.set_xticks([])
+        self.ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
         self.ax.spines['bottom'].set_color('white')
         self.ax.spines['top'].set_color('white')
         self.ax.spines['left'].set_color('white')
@@ -276,10 +285,12 @@ class ProbabilityChart(QWidget):
         self.ax.clear()
         self.ax.set_xlim(1, 15)
         self.ax.set_ylim(0, 1.0)
-        self.ax.set_xticks(range(1, 16))  # 1-15 minutes, 1 minute increments
-        self.ax.set_xlabel('Time (minutes)', color='white')
+        self.ax.set_xlabel('', color='white')
         self.ax.set_ylabel('Probability', color='white')
         self.ax.tick_params(colors='white')
+        # Remove x-axis ticks and labels
+        self.ax.set_xticks([])
+        self.ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
         self.ax.spines['bottom'].set_color('white')
         self.ax.spines['top'].set_color('white')
         self.ax.spines['left'].set_color('white')
@@ -290,7 +301,7 @@ class ProbabilityChart(QWidget):
         x_vals = [p[0] / 60.0 for p in self.data]  # Convert to minutes
         y_vals = [p[1] for p in self.data]
         
-        self.ax.plot(x_vals, y_vals, color='#00ff00', linewidth=2)
+        self.ax.plot(x_vals, y_vals, color='cyan', linewidth=2)
         self.canvas.draw()
 
 
@@ -357,16 +368,19 @@ class BTCChart(QWidget):
 
 
 class ResolutionOverlay(QWidget):
-    """Full-screen overlay showing market resolution."""
+    """Full-screen overlay showing market resolution with green/red flash."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        # Make it a child widget that overlays the parent
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.raise_()  # Bring to front
         self.hide()
         
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setContentsMargins(0, 0, 0, 0)
         
         self.resolution_label = QLabel("")
         self.resolution_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -381,14 +395,17 @@ class ResolutionOverlay(QWidget):
         self.setLayout(layout)
     
     def show_resolution(self, resolution: str):
-        """Show the overlay with the given resolution."""
+        """Show the overlay with the given resolution (green for YES, red for NO)."""
         self.resolution_label.setText(resolution)
         if resolution == "YES":
-            self.setStyleSheet("background-color: rgba(0, 255, 0, 200); color: black;")
+            # Green flash like terminal app
+            self.setStyleSheet("background-color: #00ff00; color: black;")
             self.resolution_label.setStyleSheet("font-size: 72pt; font-weight: bold; color: black;")
         else:
-            self.setStyleSheet("background-color: rgba(255, 0, 0, 200); color: white;")
+            # Red flash like terminal app
+            self.setStyleSheet("background-color: #ff0000; color: white;")
             self.resolution_label.setStyleSheet("font-size: 72pt; font-weight: bold; color: white;")
+        self.raise_()  # Ensure it's on top
         self.show()
     
     def hide_resolution(self):

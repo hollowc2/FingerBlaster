@@ -95,7 +95,12 @@ def run_textual_app():
                 pp = self.query_one("#price_panel", PricePanel)
                 pp.yes_price = yes_price
                 pp.no_price = no_price
-                pp.spread = f"{best_bid:.2f} / {best_ask:.2f}"
+                # YES spread is in YES terms: best_bid / best_ask
+                pp.yes_spread = f"{best_bid:.2f} / {best_ask:.2f}"
+                # NO spread is in NO terms: (1 - best_ask) / (1 - best_bid)
+                no_best_bid = 1.0 - best_ask if best_ask < 1.0 else 0.0
+                no_best_ask = 1.0 - best_bid if best_bid > 0.0 else 1.0
+                pp.no_spread = f"{no_best_bid:.2f} / {no_best_ask:.2f}"
             except Exception as e:
                 logger.debug(f"Error updating price panel: {e}")
         
