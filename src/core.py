@@ -26,6 +26,7 @@ from src.engine import (
     MarketDataManager, HistoryManager, WebSocketManager, 
     OrderExecutor, RTDSManager
 )
+from src.analytics import AnalyticsEngine, AnalyticsSnapshot, TimerUrgency, EdgeDirection
 
 logger = logging.getLogger("FingerBlaster")
 
@@ -36,11 +37,12 @@ CALLBACK_EVENTS: Tuple[str, ...] = (
     'btc_price_update',   # (price: float)
     'price_update',       # (yes_price: float, no_price: float, best_bid: float, best_ask: float)
     'account_stats_update',  # (balance, yes_bal, no_bal, size, avg_yes, avg_no)
-    'countdown_update',   # (time_str: str)
+    'countdown_update',   # (time_str: str, urgency: TimerUrgency, seconds_remaining: int)
     'prior_outcomes_update',  # (outcomes: List[str])
     'resolution',         # (resolution: Optional[str])
     'log',               # (message: str)
     'chart_update',      # (data, ...) - variable args based on chart type
+    'analytics_update',  # (snapshot: AnalyticsSnapshot)
 )
 
 
@@ -312,6 +314,13 @@ class FingerBlasterCore:
             self.config,
             self._on_rtds_btc_price
         )
+        
+        # Analytics engine for quantitative analysis
+        self.analytics_engine = AnalyticsEngine()
+        
+        # CEX price tracking for oracle lag
+        self._cex_btc_price: Optional[float] = None
+        self._cex_btc_timestamp: Optional[float] = None
         
         # State
         self.resolution_shown = False
@@ -772,7 +781,7 @@ class FingerBlasterCore:
             logger.error(f"Error updating account stats: {e}", exc_info=True)
     
     async def update_countdown(self) -> None:
-        """Update the countdown timer with improved timezone handling."""
+        """Update the countdown timer with improved timezone handling and urgency."""
         market = await self.market_manager.get_market()
         if not market:
             return
@@ -793,6 +802,7 @@ class FingerBlasterCore:
             
             # Clamp to zero to prevent negative display before showing EXPIRED
             total_seconds = max(0.0, total_seconds)
+            seconds_remaining = int(total_seconds)
             
             if total_seconds <= 0:
                 time_str = "EXPIRED"
@@ -802,9 +812,114 @@ class FingerBlasterCore:
                 remaining_secs = secs % 60
                 time_str = f"{mins:02d}:{remaining_secs:02d}"
             
-            self._emit('countdown_update', time_str)
+            # Calculate timer urgency
+            urgency = self.analytics_engine.get_timer_urgency(seconds_remaining)
+            
+            self._emit('countdown_update', time_str, urgency, seconds_remaining)
         except Exception as e:
             logger.debug(f"Error updating countdown: {e}", exc_info=True)
+    
+    async def update_analytics(self) -> None:
+        """Update full analytics snapshot and emit to UI."""
+        market = await self.market_manager.get_market()
+        if not market:
+            return
+        
+        try:
+            # Get BTC price
+            btc_price = self.rtds_manager.get_current_price()
+            if not btc_price or btc_price <= 0:
+                btc_history = await self.history_manager.get_btc_history()
+                btc_price = btc_history[-1] if btc_history else 0.0
+            
+            if btc_price <= 0:
+                return
+            
+            # Get strike price
+            strike_str = str(market.get('strike_price', '')).replace(',', '').replace('$', '').strip()
+            strike_price = self._parse_strike(strike_str)
+            if not strike_price or strike_price <= 0:
+                return
+            
+            # Get time remaining
+            end_str = market.get('end_date')
+            if not end_str:
+                return
+            
+            dt_end = pd.Timestamp(end_str)
+            if dt_end.tz is None:
+                dt_end = dt_end.tz_localize('UTC')
+            
+            now = pd.Timestamp.now(tz='UTC')
+            time_remaining = max(0, int((dt_end - now).total_seconds()))
+            
+            # Get current prices
+            prices = await self.market_manager.calculate_mid_price()
+            yes_price, no_price, best_bid, best_ask = prices
+            
+            # Get order book for liquidity/slippage
+            order_book = await self.market_manager.get_raw_order_book()
+            
+            # Get positions
+            token_map = await self.market_manager.get_token_map()
+            yes_position = 0.0
+            no_position = 0.0
+            if token_map:
+                y_id = token_map.get('YES')
+                n_id = token_map.get('NO')
+                if y_id:
+                    yes_position = self.connector.get_token_balance(y_id)
+                if n_id:
+                    no_position = self.connector.get_token_balance(n_id)
+            
+            # Get prior outcomes for regime detection
+            outcomes_list = []
+            for o in self.prior_outcomes:
+                if isinstance(o, str):
+                    outcomes_list.append(o)
+                elif isinstance(o, dict):
+                    outcomes_list.append(o.get('outcome', ''))
+            
+            # Update oracle lag with CEX price
+            chainlink_price = self.rtds_manager.get_chainlink_price()
+            if self._cex_btc_price:
+                self.analytics_engine.update_oracle_prices(
+                    chainlink_price=chainlink_price,
+                    cex_price=self._cex_btc_price,
+                    chainlink_timestamp=self._cex_btc_timestamp,
+                    cex_timestamp=time.time()
+                )
+            
+            # Generate full analytics snapshot
+            snapshot = await self.analytics_engine.generate_snapshot(
+                btc_price=btc_price,
+                strike_price=strike_price,
+                time_remaining_seconds=time_remaining,
+                yes_market_price=yes_price,
+                no_market_price=no_price,
+                order_book=order_book,
+                yes_position=yes_position,
+                no_position=no_position,
+                avg_entry_yes=self.avg_entry_price_yes,
+                avg_entry_no=self.avg_entry_price_no,
+                prior_outcomes=outcomes_list,
+                order_size_usd=self.selected_size
+            )
+            
+            self._emit('analytics_update', snapshot)
+            
+        except Exception as e:
+            logger.debug(f"Error updating analytics: {e}", exc_info=True)
+    
+    async def fetch_cex_price(self) -> None:
+        """Fetch CEX price for oracle lag comparison."""
+        try:
+            price = await asyncio.to_thread(self.connector.get_btc_price)
+            if price and isinstance(price, (int, float)) and price > 0:
+                self._cex_btc_price = float(price)
+                self._cex_btc_timestamp = time.time()
+        except Exception as e:
+            logger.debug(f"Error fetching CEX price: {e}")
     
     async def check_if_market_expired(self) -> None:
         """Check if market has expired and show resolution.
@@ -895,6 +1010,8 @@ class FingerBlasterCore:
             await self.ws_manager.stop()
             # Invalidate price cache on market reset
             self._invalidate_price_cache()
+            # Reset analytics for new market
+            self.analytics_engine.reset()
             # Note: Keep RTDS running for next market
             self.resolution_shown = False
             self._emit('resolution', None)  # Hide overlay

@@ -30,6 +30,7 @@ def run_textual_app():
     from src.core import FingerBlasterCore
     from src.ui import MarketPanel, PricePanel, StatsPanel, ChartsPanel, ResolutionOverlay, ProbabilityChart
     from src.utils import handle_ui_errors
+    from src.analytics import AnalyticsSnapshot, TimerUrgency
     
     class FingerBlasterApp(App):
         """Main application class using Textual UI with shared core."""
@@ -39,7 +40,7 @@ def run_textual_app():
         BINDINGS = [
             Binding("y", "buy_yes", "Buy YES", show=True),
             Binding("n", "buy_no", "Buy NO", show=True),
-            Binding("f", "flatten", "Flatten", show=True),
+            Binding("f", "panic_flatten", "⚠ FLAT ALL", show=True, priority=True),
             Binding("c", "cancel_all", "Cancel All", show=True),
             Binding("plus", "size_up", "Size +$1", show=True),
             Binding("=", "size_up", "Size +$1", show=False),
@@ -70,6 +71,7 @@ def run_textual_app():
             self.core.register_callback('resolution', self._on_resolution)
             self.core.register_callback('log', self._on_log)
             self.core.register_callback('chart_update', self._on_chart_update)
+            self.core.register_callback('analytics_update', self._on_analytics_update)
         
         # Callback handlers for core events
         async def _on_market_update(self, strike: str, ends: str) -> None:
@@ -114,11 +116,13 @@ def run_textual_app():
             except Exception as e:
                 logger.debug(f"Error updating stats panel: {e}")
         
-        async def _on_countdown_update(self, time_str: str) -> None:
-            """Handle countdown update from core."""
+        async def _on_countdown_update(self, time_str: str, urgency: TimerUrgency = None, seconds_remaining: int = 0) -> None:
+            """Handle countdown update from core with urgency level."""
             try:
                 mp = self.query_one("#market_panel", MarketPanel)
                 mp.time_left = time_str
+                if urgency:
+                    mp.timer_urgency = urgency
             except Exception as e:
                 logger.debug(f"Error updating countdown: {e}")
         
@@ -204,6 +208,20 @@ def run_textual_app():
             except Exception as e:
                 logger.debug(f"Error updating chart: {e}")
         
+        async def _on_analytics_update(self, snapshot: AnalyticsSnapshot) -> None:
+            """Handle analytics update from core."""
+            try:
+                mp = self.query_one("#market_panel", MarketPanel)
+                mp.update_analytics(snapshot)
+                
+                pp = self.query_one("#price_panel", PricePanel)
+                pp.update_analytics(snapshot)
+                
+                sp = self.query_one("#stats_panel", StatsPanel)
+                sp.update_analytics(snapshot)
+            except Exception as e:
+                logger.debug(f"Error updating analytics: {e}")
+        
         def compose(self):
             """Compose the application UI."""
             yield Header(show_clock=True)
@@ -235,6 +253,7 @@ def run_textual_app():
             self.set_interval(self.config.btc_price_interval, self._update_btc_price)
             self.set_interval(self.config.account_stats_interval, self._update_account_stats)
             self.set_interval(self.config.countdown_interval, self._update_countdown)
+            self.set_interval(self.config.analytics_interval, self._update_analytics)
         
         async def on_unmount(self) -> None:
             """Handle graceful shutdown."""
@@ -260,6 +279,11 @@ def run_textual_app():
             """Update countdown - delegate to core."""
             await self.core.update_countdown()
         
+        @handle_ui_errors
+        async def _update_analytics(self) -> None:
+            """Update analytics - delegate to core."""
+            await self.core.update_analytics()
+        
         def action_size_up(self) -> None:
             """Increase order size."""
             self.core.size_up()
@@ -280,8 +304,9 @@ def run_textual_app():
             """Place BUY NO order."""
             asyncio.create_task(self.core.place_order('NO'))
         
-        def action_flatten(self) -> None:
-            """Flatten all positions."""
+        def action_panic_flatten(self) -> None:
+            """PANIC BUTTON: Immediately flatten all positions at market."""
+            self.core.log_msg("⚠️ PANIC FLATTEN ACTIVATED ⚠️")
             asyncio.create_task(self.core.flatten())
         
         def action_cancel_all(self) -> None:

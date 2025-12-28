@@ -87,6 +87,25 @@ class AppConfig:
     btc_price_interval: float = 3.0  # Fallback BTC price update (RTDS is primary)
     account_stats_interval: float = 10.0  # Refresh account balances every 10s
     countdown_interval: float = 0.2  # Update countdown every 200ms for smooth display
+    analytics_interval: float = 0.5  # Analytics update every 500ms
+    
+    # =========================================================================
+    # Analytics settings
+    # =========================================================================
+    # Timer urgency thresholds (in minutes)
+    timer_critical_minutes: int = 2  # Red blinking, gamma/theta risk
+    timer_watchful_minutes: int = 5  # Orange, increased attention
+    
+    # Fair value calculation
+    default_volatility: float = 0.60  # 60% annualized BTC volatility default
+    edge_threshold_bps: float = 50.0  # Basis points threshold for edge detection
+    
+    # Slippage estimation
+    default_slippage_order_size: float = 10.0  # Default order size for slippage calc
+    
+    # Oracle lag monitoring
+    oracle_lag_warning_ms: int = 500  # Warn if lag > 500ms
+    oracle_lag_critical_ms: int = 2000  # Critical if lag > 2000ms
 
 
 CSS = """
@@ -141,6 +160,38 @@ Screen {
     padding: 1;
     border-bottom: ascii gray;
     content-align: center middle;
+}
+
+/* Analytics-specific styles */
+.analytics_label {
+    color: #888888;
+    margin-top: 0;
+}
+
+.edge_undervalued {
+    color: #00ff00;
+    text-style: bold;
+}
+
+.edge_overvalued {
+    color: #ff0000;
+    text-style: bold;
+}
+
+.urgency_critical {
+    color: #ff0000;
+    text-style: bold blink;
+    background: #330000;
+}
+
+.urgency_watchful {
+    color: #ff8800;
+    text-style: bold;
+}
+
+.urgency_normal {
+    color: #00ff00;
+    text-style: bold;
 }
 
 #log_panel {

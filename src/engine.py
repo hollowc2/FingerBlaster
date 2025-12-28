@@ -291,6 +291,24 @@ class MarketDataManager:
         """
         async with self.lock:
             return self.market_start_time
+    
+    async def get_raw_order_book(self) -> Dict[str, Dict[str, Dict[float, float]]]:
+        """Get raw order book data for analytics (thread-safe copy).
+        
+        Returns:
+            Copy of raw order book: {YES/NO: {bids/asks: {price: size}}}
+        """
+        async with self.lock:
+            return {
+                'YES': {
+                    'bids': dict(self.raw_books['YES']['bids']),
+                    'asks': dict(self.raw_books['YES']['asks'])
+                },
+                'NO': {
+                    'bids': dict(self.raw_books['NO']['bids']),
+                    'asks': dict(self.raw_books['NO']['asks'])
+                }
+            }
 
 
 class HistoryManager:

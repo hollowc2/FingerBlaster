@@ -40,6 +40,7 @@ from src.config import AppConfig
 from src.ui_pyqt import (
     MarketPanel, PricePanel, StatsPanel, ProbabilityChart, BTCChart, ResolutionOverlay
 )
+from src.analytics import AnalyticsSnapshot, TimerUrgency
 
 logger = logging.getLogger("FingerBlaster")
 
@@ -97,11 +98,12 @@ class UIUpdateSignals(QObject):
     btc_price = pyqtSignal(float)
     prices = pyqtSignal(float, float, str, str)
     account_stats = pyqtSignal(float, float, float, float, float, float)  # balance, yes_bal, no_bal, size, avg_yes, avg_no
-    countdown = pyqtSignal(str)
+    countdown = pyqtSignal(str, object, int)  # time_str, urgency, seconds_remaining
     prior_outcomes = pyqtSignal(str)
     resolution_show = pyqtSignal(str)
     resolution_hide = pyqtSignal()
     log_message = pyqtSignal(str)
+    analytics_update = pyqtSignal(object)  # AnalyticsSnapshot
 
 
 class FingerBlasterPyQtApp(QMainWindow):
@@ -284,6 +286,7 @@ class FingerBlasterPyQtApp(QMainWindow):
         self.core.register_callback('resolution', self._on_resolution_sync)
         self.core.register_callback('log', self._on_log)
         self.core.register_callback('chart_update', self._on_chart_update_sync)
+        self.core.register_callback('analytics_update', self._on_analytics_update_sync)
     
     def setup_timers(self):
         """Setup update timers."""
@@ -314,6 +317,13 @@ class FingerBlasterPyQtApp(QMainWindow):
             lambda: run_async_task(self.core.update_countdown())
         )
         self.countdown_timer.start(int(self.config.countdown_interval * 1000))
+        
+        # Analytics timer
+        self.analytics_timer = QTimer()
+        self.analytics_timer.timeout.connect(
+            lambda: run_async_task(self.core.update_analytics())
+        )
+        self.analytics_timer.start(int(self.config.analytics_interval * 1000))
     
     def setup_shortcuts(self):
         """Setup keyboard shortcuts - stored as instance variables to prevent garbage collection."""
@@ -364,7 +374,13 @@ class FingerBlasterPyQtApp(QMainWindow):
         key = event.key()
         modifiers = event.modifiers()
         
-        # Only handle shortcuts with Control modifier
+        # F key without modifiers = PANIC FLATTEN
+        if key == Qt.Key.Key_F and not (modifiers & Qt.KeyboardModifier.ControlModifier):
+            self.panic_flatten()
+            event.accept()
+            return
+        
+        # Only handle other shortcuts with Control modifier
         if not (modifiers & Qt.KeyboardModifier.ControlModifier):
             super().keyPressEvent(event)
             return
@@ -377,7 +393,7 @@ class FingerBlasterPyQtApp(QMainWindow):
             self.buy_no()
             event.accept()
         elif key == Qt.Key.Key_F:
-            self.flatten()
+            self.panic_flatten()  # Ctrl+F also works
             event.accept()
         elif key == Qt.Key.Key_C:
             self.cancel_all()
@@ -410,11 +426,22 @@ class FingerBlasterPyQtApp(QMainWindow):
         self.signals.btc_price.connect(self.market_panel.update_btc_price, connection_type)
         self.signals.prices.connect(self.price_panel.update_prices, connection_type)
         self.signals.account_stats.connect(self.stats_panel.update_stats, connection_type)
-        self.signals.countdown.connect(self.market_panel.update_time_left, connection_type)
+        self.signals.countdown.connect(self._update_countdown_slot, connection_type)
         self.signals.prior_outcomes.connect(self.market_panel.update_prior_outcomes, connection_type)
         self.signals.resolution_show.connect(self._show_resolution_slot, connection_type)
         self.signals.resolution_hide.connect(self.resolution_overlay.hide_resolution, connection_type)
         self.signals.log_message.connect(self._update_log_slot, connection_type)
+        self.signals.analytics_update.connect(self._update_analytics_slot, connection_type)
+    
+    def _update_countdown_slot(self, time_str: str, urgency, seconds_remaining: int):
+        """Update countdown with urgency."""
+        self.market_panel.update_time_left(time_str, urgency, seconds_remaining)
+    
+    def _update_analytics_slot(self, snapshot: AnalyticsSnapshot):
+        """Update all panels with analytics snapshot."""
+        self.market_panel.update_analytics(snapshot)
+        self.price_panel.update_analytics(snapshot)
+        self.stats_panel.update_analytics(snapshot)
     
     def _show_resolution_slot(self, resolution: str):
         """Show resolution overlay slot with green/red flash."""
@@ -458,9 +485,13 @@ class FingerBlasterPyQtApp(QMainWindow):
         avg_no = avg_entry_price_no if avg_entry_price_no is not None else 0.0
         self.signals.account_stats.emit(balance, yes_balance, no_balance, current_size, avg_yes, avg_no)
     
-    def _on_countdown_update_sync(self, time_str: str):
-        """Handle countdown update from core."""
-        self.signals.countdown.emit(time_str)
+    def _on_countdown_update_sync(self, time_str: str, urgency=None, seconds_remaining: int = 0):
+        """Handle countdown update from core with urgency."""
+        self.signals.countdown.emit(time_str, urgency, seconds_remaining)
+    
+    def _on_analytics_update_sync(self, snapshot: AnalyticsSnapshot):
+        """Handle analytics update from core."""
+        self.signals.analytics_update.emit(snapshot)
     
     def _on_prior_outcomes_update_sync(self, outcomes: list):
         """Handle prior outcomes update from core."""
@@ -557,6 +588,11 @@ class FingerBlasterPyQtApp(QMainWindow):
     
     def flatten(self):
         """Flatten all positions."""
+        run_async_task(self.core.flatten())
+    
+    def panic_flatten(self):
+        """PANIC BUTTON: Immediately flatten all positions at market."""
+        self.core.log_msg("⚠️ PANIC FLATTEN ACTIVATED ⚠️")
         run_async_task(self.core.flatten())
     
     def cancel_all(self):
@@ -673,7 +709,7 @@ class FingerBlasterPyQtApp(QMainWindow):
         keybindings = [
             ("Ctrl+Y", "Buy YES"),
             ("Ctrl+N", "Buy NO"),
-            ("Ctrl+F", "Flatten all positions"),
+            ("F", "⚠️ PANIC FLATTEN - Sell all positions immediately"),
             ("Ctrl+C", "Cancel all pending orders"),
             ("Ctrl++ / Ctrl+=", "Increase order size"),
             ("Ctrl+-", "Decrease order size"),
