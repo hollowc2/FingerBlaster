@@ -10,7 +10,10 @@ import hashlib
 import base64
 import urllib.parse
 from decimal import Decimal, ROUND_DOWN
-from typing import Optional, Dict, List, Any, Tuple
+from functools import wraps
+from typing import Optional, Dict, List, Any, Tuple, Callable, TypeVar
+
+T = TypeVar('T')
 
 import pandas as pd
 import requests
@@ -61,6 +64,56 @@ class SignatureType:
 
 # Configure logger
 logger = logging.getLogger("PolymarketConnector")
+
+
+def validate_order_params(func: Callable[..., T]) -> Callable[..., T]:
+    """Decorator to validate order parameters before execution.
+    
+    Validates token_id, amount/size, and side parameters to prevent
+    invalid orders from being submitted to the API.
+    
+    Args:
+        func: The order function to wrap
+        
+    Returns:
+        Wrapped function with input validation
+    """
+    @wraps(func)
+    def wrapper(self, token_id: str, amount: float, side: str, *args, **kwargs) -> T:
+        # Validate token_id format (should be non-empty string)
+        if not token_id or not isinstance(token_id, str):
+            logger.error(f"Invalid token_id: {token_id} (type: {type(token_id)})")
+            return None
+        
+        # Token IDs are typically long hex strings
+        if len(token_id) < 10:
+            logger.error(f"Token ID appears too short: {token_id}")
+            return None
+        
+        # Validate amount
+        if not isinstance(amount, (int, float)):
+            logger.error(f"Invalid amount type: {type(amount)}")
+            return None
+        
+        if amount <= 0:
+            logger.error(f"Invalid amount: {amount} (must be positive)")
+            return None
+        
+        if amount > 1_000_000:  # Sanity check - $1M max order
+            logger.error(f"Amount exceeds sanity limit: {amount}")
+            return None
+        
+        # Validate side
+        if not isinstance(side, str):
+            logger.error(f"Invalid side type: {type(side)}")
+            return None
+        
+        if side.upper() not in ('BUY', 'SELL'):
+            logger.error(f"Invalid side: {side} (must be 'BUY' or 'SELL')")
+            return None
+        
+        return func(self, token_id, amount, side, *args, **kwargs)
+    return wrapper
 
 
 class PolymarketConnector(DataConnector):
@@ -1240,6 +1293,7 @@ class PolymarketConnector(DataConnector):
             logger.error(f"Error creating order: {e}", exc_info=True)
             return None
     
+    @validate_order_params
     def create_market_order(
         self, token_id: str, amount: float, side: str
     ) -> Optional[Dict[str, Any]]:
@@ -1253,16 +1307,10 @@ class PolymarketConnector(DataConnector):
             
         Returns:
             Order response dictionary or None
+            
+        Note:
+            Input validation is handled by the @validate_order_params decorator.
         """
-        # Input validation
-        if not token_id or amount <= 0:
-            logger.error(f"Invalid market order parameters: token_id={token_id}, amount={amount}")
-            return None
-        
-        if side.upper() not in ('BUY', 'SELL'):
-            logger.error(f"Invalid side: {side}")
-            return None
-        
         try:
             # Clean and validate amount
             clean_amount = float(

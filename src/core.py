@@ -30,6 +30,20 @@ from src.engine import (
 logger = logging.getLogger("FingerBlaster")
 
 
+# Event types for callback registration
+CALLBACK_EVENTS: Tuple[str, ...] = (
+    'market_update',      # (strike: str, ends: str)
+    'btc_price_update',   # (price: float)
+    'price_update',       # (yes_price: float, no_price: float, best_bid: float, best_ask: float)
+    'account_stats_update',  # (balance, yes_bal, no_bal, size, avg_yes, avg_no)
+    'countdown_update',   # (time_str: str)
+    'prior_outcomes_update',  # (outcomes: List[str])
+    'resolution',         # (resolution: Optional[str])
+    'log',               # (message: str)
+    'chart_update',      # (data, ...) - variable args based on chart type
+)
+
+
 class CallbackManager:
     """Manages event callbacks with proper cleanup.
     
@@ -37,22 +51,25 @@ class CallbackManager:
     1. Supporting callback unregistration
     2. Providing cleanup methods
     3. Using regular lists (not WeakSet) to prevent premature garbage collection
+    
+    Supported events (defined in CALLBACK_EVENTS):
+    - market_update: Market found/changed
+    - btc_price_update: BTC price changed
+    - price_update: YES/NO prices changed
+    - account_stats_update: Balance/position changed
+    - countdown_update: Timer tick
+    - prior_outcomes_update: Prior outcomes display
+    - resolution: Market resolved
+    - log: Log message
+    - chart_update: Chart data changed
     """
     
     def __init__(self):
-        """Initialize callback manager."""
+        """Initialize callback manager with all supported event types."""
         # Use regular lists (not WeakSet) to prevent callbacks from being GC'd
         # The unregister_callback method provides proper cleanup
         self._callbacks: Dict[str, List[Callable]] = {
-            'market_update': [],
-            'btc_price_update': [],
-            'price_update': [],
-            'account_stats_update': [],
-            'countdown_update': [],
-            'prior_outcomes_update': [],
-            'resolution': [],
-            'log': [],
-            'chart_update': [],
+            event: [] for event in CALLBACK_EVENTS
         }
         # Use threading.Lock for synchronous methods, asyncio.Lock for async methods
         self._lock = threading.Lock()
@@ -157,6 +174,110 @@ class CallbackManager:
                 logger.error(f"Error in callback for {event}: {e}", exc_info=True)
 
 
+class PositionTracker:
+    """Tracks average entry prices for YES/NO positions.
+    
+    Provides clean separation of position tracking logic with proper
+    validation and weighted average calculations.
+    """
+    
+    def __init__(self):
+        """Initialize position tracker."""
+        self._avg_prices: Dict[str, Optional[float]] = {
+            'YES': None,
+            'NO': None,
+        }
+    
+    def update_position(
+        self, 
+        side: str, 
+        old_balance: float,
+        new_shares: float, 
+        entry_price: float
+    ) -> bool:
+        """Update position with new trade.
+        
+        Args:
+            side: Which side was traded ('YES' or 'NO')
+            old_balance: Balance before trade
+            new_shares: Shares received from trade
+            entry_price: Price paid per share
+            
+        Returns:
+            True if update was successful, False otherwise
+        """
+        side = side.upper()
+        if side not in ('YES', 'NO'):
+            logger.warning(f"Invalid side for position update: {side}")
+            return False
+        
+        if entry_price <= 0 or new_shares <= 0:
+            logger.warning(
+                f"Invalid position update: price={entry_price}, shares={new_shares}"
+            )
+            return False
+        
+        total_shares = old_balance + new_shares
+        if total_shares <= 0:
+            self._avg_prices[side] = None
+            return True
+        
+        current_avg = self._avg_prices[side]
+        if current_avg is not None and old_balance > 0:
+            # Weighted average: (old_cost + new_cost) / total_shares
+            old_cost = current_avg * old_balance
+            new_cost = entry_price * new_shares
+            self._avg_prices[side] = (old_cost + new_cost) / total_shares
+        else:
+            # First position
+            self._avg_prices[side] = entry_price
+        
+        return True
+    
+    def reset(self, side: Optional[str] = None) -> None:
+        """Reset position tracking for one or all sides.
+        
+        Args:
+            side: Side to reset ('YES', 'NO'), or None for both
+        """
+        if side is None:
+            self._avg_prices['YES'] = None
+            self._avg_prices['NO'] = None
+        elif side.upper() in ('YES', 'NO'):
+            self._avg_prices[side.upper()] = None
+    
+    def get_average_price(self, side: str) -> Optional[float]:
+        """Get current average entry price for a side.
+        
+        Args:
+            side: Side to get price for ('YES' or 'NO')
+            
+        Returns:
+            Average entry price or None if no position
+        """
+        return self._avg_prices.get(side.upper())
+    
+    @property
+    def avg_entry_price_yes(self) -> Optional[float]:
+        """Get YES average entry price."""
+        return self._avg_prices['YES']
+    
+    @avg_entry_price_yes.setter
+    def avg_entry_price_yes(self, value: Optional[float]) -> None:
+        """Set YES average entry price."""
+        self._avg_prices['YES'] = value
+    
+    @property
+    def avg_entry_price_no(self) -> Optional[float]:
+        """Get NO average entry price."""
+        return self._avg_prices['NO']
+    
+    @avg_entry_price_no.setter
+    def avg_entry_price_no(self, value: Optional[float]) -> None:
+        """Set NO average entry price."""
+        self._avg_prices['NO'] = value
+
+
 class FingerBlasterCore:
     """Shared business logic controller with improved architecture.
     
@@ -200,9 +321,10 @@ class FingerBlasterCore:
         self.last_chart_update: float = 0.0
         self.selected_size: float = 1.0
         
-        # Average entry price tracking (static, only changes when positions change)
-        self.avg_entry_price_yes: Optional[float] = None
-        self.avg_entry_price_no: Optional[float] = None
+        # Position tracking with average entry prices
+        self.position_tracker = PositionTracker()
+        
+        # Backward-compatible property accessors are defined below
         
         # Callback management
         self.callback_manager = CallbackManager()
@@ -211,12 +333,60 @@ class FingerBlasterCore:
         self._cached_prices: Optional[Tuple[float, float, float, float]] = None
         self._cache_timestamp: float = 0.0
         self._cache_ttl: float = 0.1  # 100ms cache
+        self._cached_market_id: Optional[str] = None  # Track market for cache invalidation
         
         # Load prior outcomes
         try:
             self._load_prior_outcomes()
         except Exception as exc:
             logger.warning("Could not load prior outcomes: %s", exc)
+    
+    # Backward-compatible property accessors for position tracking
+    @property
+    def avg_entry_price_yes(self) -> Optional[float]:
+        """Get YES average entry price (backward compatible)."""
+        return self.position_tracker.avg_entry_price_yes
+    
+    @avg_entry_price_yes.setter
+    def avg_entry_price_yes(self, value: Optional[float]) -> None:
+        """Set YES average entry price (backward compatible)."""
+        self.position_tracker.avg_entry_price_yes = value
+    
+    @property
+    def avg_entry_price_no(self) -> Optional[float]:
+        """Get NO average entry price (backward compatible)."""
+        return self.position_tracker.avg_entry_price_no
+    
+    @avg_entry_price_no.setter
+    def avg_entry_price_no(self, value: Optional[float]) -> None:
+        """Set NO average entry price (backward compatible)."""
+        self.position_tracker.avg_entry_price_no = value
+    
+    @staticmethod
+    def calculate_spreads(
+        best_bid: float, 
+        best_ask: float
+    ) -> Tuple[str, str]:
+        """Calculate formatted spread strings for YES and NO.
+        
+        Centralizes spread calculation logic (DRY principle).
+        
+        Args:
+            best_bid: Best bid price in YES terms
+            best_ask: Best ask price in YES terms
+            
+        Returns:
+            Tuple of (yes_spread_str, no_spread_str)
+        """
+        # YES spread is in YES terms: best_bid / best_ask
+        yes_spread = f"{best_bid:.2f} / {best_ask:.2f}"
+        
+        # NO spread is in NO terms: (1 - best_ask) / (1 - best_bid)
+        no_best_bid = 1.0 - best_ask if best_ask < 1.0 else 0.0
+        no_best_ask = 1.0 - best_bid if best_bid > 0.0 else 1.0
+        no_spread = f"{no_best_bid:.2f} / {no_best_ask:.2f}"
+        
+        return yes_spread, no_spread
     
     async def start_rtds(self) -> None:
         """Start RTDS for real-time BTC prices.
@@ -341,14 +511,32 @@ class FingerBlasterCore:
         except Exception as e:
             logger.error(f"Error handling RTDS BTC price: {e}", exc_info=True)
     
+    def _invalidate_price_cache(self) -> None:
+        """Invalidate the price cache.
+        
+        Call this when market changes to ensure fresh price calculation.
+        """
+        self._cached_prices = None
+        self._cache_timestamp = 0.0
+        self._cached_market_id = None
+    
     async def _recalc_price(self) -> None:
         """Recalculate mid price and update UI with caching.
         
         Uses caching to avoid redundant calculations.
+        Automatically invalidates cache on market change.
         """
         now = time.time()
         
-        # Use cached value if recent
+        # Check if market has changed - invalidate cache if so
+        current_market = await self.market_manager.get_market()
+        current_market_id = current_market.get('market_id') if current_market else None
+        
+        if current_market_id != self._cached_market_id:
+            self._invalidate_price_cache()
+            self._cached_market_id = current_market_id
+        
+        # Use cached value if recent and valid
         if (self._cached_prices is not None and 
             now - self._cache_timestamp < self._cache_ttl):
             yes_price, no_price, best_bid, best_ask = self._cached_prices
@@ -379,6 +567,91 @@ class FingerBlasterCore:
             history = await self.history_manager.get_yes_history()
             self._emit('chart_update', history)
     
+    async def _resolve_dynamic_strike(
+        self, 
+        new_market: Dict[str, Any], 
+        market_start_time: pd.Timestamp
+    ) -> str:
+        """Resolve dynamic strike price using RTDS or API fallback.
+        
+        This method attempts to get the Chainlink BTC/USD price at market start
+        using multiple fallback strategies:
+        1. RTDS historical data (if app was running when market started)
+        2. Chainlink API historical lookup
+        3. Binance API fallback
+        
+        Args:
+            new_market: Market data dictionary (modified in place)
+            market_start_time: When the market started
+            
+        Returns:
+            Resolved strike price as formatted string, or "Dynamic" if unresolved
+        """
+        now = pd.Timestamp.now(tz='UTC')
+        time_since_start = (now - market_start_time).total_seconds()
+        
+        # Strategy 1: Try RTDS if market started recently (within 2 minutes)
+        if time_since_start <= 120:
+            chainlink_price = self.rtds_manager.get_chainlink_price_at(market_start_time)
+            if chainlink_price and chainlink_price > 0:
+                strike = f"{chainlink_price:,.2f}"
+                self.log_msg(
+                    f"Dynamic strike: Using RTDS Chainlink price at market start: ${chainlink_price:,.2f}"
+                )
+                new_market['strike_price'] = strike
+                await self.market_manager.set_market(new_market)
+                return strike
+        else:
+            self.log_msg(
+                f"Market started {time_since_start:.0f}s ago - using API for historical price lookup"
+            )
+        
+        # Strategy 2: Try Chainlink API
+        chainlink_price = await asyncio.to_thread(
+            self.connector.get_chainlink_price_at, market_start_time
+        )
+        if chainlink_price and chainlink_price > 0:
+            strike = f"{chainlink_price:,.2f}"
+            self.log_msg(
+                f"Dynamic strike: Using Chainlink API price at market start: ${chainlink_price:,.2f}"
+            )
+            new_market['strike_price'] = strike
+            await self.market_manager.set_market(new_market)
+            return strike
+        
+        # Strategy 3: Fallback to Binance
+        price_str = await asyncio.to_thread(
+            self.connector.get_btc_price_at, market_start_time
+        )
+        if price_str and price_str != "N/A":
+            self.log_msg(
+                f"WARNING: Dynamic strike using Binance fallback (Chainlink not available): ${price_str}"
+            )
+            new_market['strike_price'] = price_str
+            await self.market_manager.set_market(new_market)
+            return price_str
+        
+        # Could not resolve
+        self.log_msg(
+            f"WARNING: Could not determine dynamic strike price at market start ({market_start_time}). "
+            f"Market started {time_since_start:.0f}s ago. This may cause incorrect strike calculation."
+        )
+        return "Dynamic"
+    
+    async def _log_current_btc_prices(self) -> None:
+        """Log current BTC prices from various sources for comparison."""
+        chainlink_price = self.rtds_manager.get_chainlink_price()
+        rtds_price = self.rtds_manager.get_current_price()
+        
+        if chainlink_price:
+            self.log_msg(f"RTDS Chainlink BTC/USD: ${chainlink_price:,.2f}")
+        if rtds_price and rtds_price != chainlink_price:
+            self.log_msg(f"RTDS Binance BTC/USDT: ${rtds_price:,.2f}")
+        if not rtds_price:
+            binance_price = await asyncio.to_thread(self.connector.get_btc_price)
+            if binance_price:
+                self.log_msg(f"Binance API BTC Price: ${binance_price:,.2f}")
+    
     async def update_market_status(self) -> None:
         """Update market status and search for new markets.
         
@@ -392,87 +665,22 @@ class FingerBlasterCore:
                     self.connector.get_active_market
                 )
                 if new_market:
-                        success = await self.market_manager.set_market(new_market)
-                        if success:
-                            await self.history_manager.clear_yes_history()
-                            strike = str(new_market.get('strike_price', 'N/A'))
-                            
-                            # For dynamic strikes, use RTDS to get Chainlink price at market start
-                            market_start_time = await self.market_manager.get_market_start_time()
-                            if strike == "Dynamic" and market_start_time:
-                                # Check if market started in the past (we joined mid-cycle)
-                                # RTDS only has data from when the app started, so if market started
-                                # more than 2 minutes ago, we need to use the API instead
-                                now = pd.Timestamp.now(tz='UTC')
-                                time_since_start = (now - market_start_time).total_seconds()
-                                
-                                # If market started more than 2 minutes ago, RTDS won't have the data
-                                # Skip RTDS and go straight to API
-                                chainlink_price = None
-                                if time_since_start <= 120:  # Market started within last 2 minutes
-                                    # Try RTDS first (only if we were running when market started)
-                                    chainlink_price = self.rtds_manager.get_chainlink_price_at(market_start_time)
-                                    if chainlink_price and chainlink_price > 0:
-                                        strike = f"{chainlink_price:,.2f}"
-                                        self.log_msg(
-                                            f"Dynamic strike: Using RTDS Chainlink price at market start ({market_start_time}): ${chainlink_price:,.2f}"
-                                        )
-                                        # Update market with correct strike
-                                        new_market['strike_price'] = strike
-                                        await self.market_manager.set_market(new_market)
-                                
-                                # If RTDS doesn't have it (or market started >2 min ago), use API
-                                if not chainlink_price or chainlink_price <= 0:
-                                    if time_since_start > 120:
-                                        self.log_msg(
-                                            f"Market started {time_since_start:.0f}s ago - using API for historical price lookup"
-                                        )
-                                    # Try connector's Chainlink API
-                                    chainlink_price = await asyncio.to_thread(
-                                        self.connector.get_chainlink_price_at, market_start_time
-                                    )
-                                    if chainlink_price and chainlink_price > 0:
-                                        strike = f"{chainlink_price:,.2f}"
-                                        self.log_msg(
-                                            f"Dynamic strike: Using Chainlink API price at market start: ${chainlink_price:,.2f}"
-                                        )
-                                        new_market['strike_price'] = strike
-                                        await self.market_manager.set_market(new_market)
-                                    else:
-                                        # Final fallback: Binance
-                                        price_str = await asyncio.to_thread(
-                                            self.connector.get_btc_price_at, market_start_time
-                                        )
-                                        if price_str and price_str != "N/A":
-                                            strike = price_str
-                                            self.log_msg(
-                                                f"WARNING: Dynamic strike using Binance fallback (Chainlink not available): ${strike}"
-                                            )
-                                            new_market['strike_price'] = strike
-                                            await self.market_manager.set_market(new_market)
-                                        else:
-                                            self.log_msg(
-                                                f"WARNING: Could not determine dynamic strike price at market start ({market_start_time}). "
-                                                f"Market started {time_since_start:.0f}s ago. This may cause incorrect strike calculation."
-                                            )
-                                            # Don't use current price as fallback - it's wrong for mid-cycle joins
-                                            # Keep strike as "Dynamic" so user knows it's not resolved
+                    success = await self.market_manager.set_market(new_market)
+                    if success:
+                        await self.history_manager.clear_yes_history()
+                        strike = str(new_market.get('strike_price', 'N/A'))
+                        
+                        # Resolve dynamic strikes
+                        market_start_time = await self.market_manager.get_market_start_time()
+                        if strike == "Dynamic" and market_start_time:
+                            strike = await self._resolve_dynamic_strike(new_market, market_start_time)
                         
                         self.log_msg(
                             f"Market Found: Strike={strike}, End={new_market.get('end_date', 'N/A')}"
                         )
                         
                         # Log current BTC prices for comparison
-                        chainlink_price = self.rtds_manager.get_chainlink_price()
-                        rtds_price = self.rtds_manager.get_current_price()
-                        if chainlink_price:
-                            self.log_msg(f"RTDS Chainlink BTC/USD: ${chainlink_price:,.2f}")
-                        if rtds_price and rtds_price != chainlink_price:
-                            self.log_msg(f"RTDS Binance BTC/USDT: ${rtds_price:,.2f}")
-                        if not rtds_price:
-                            binance_price = await asyncio.to_thread(self.connector.get_btc_price)
-                            if binance_price:
-                                self.log_msg(f"Binance API BTC Price: ${binance_price:,.2f}")
+                        await self._log_current_btc_prices()
                         
                         await self.ws_manager.start()
                         # Start RTDS for real-time BTC prices
@@ -583,7 +791,10 @@ class FingerBlasterCore:
             diff = dt_end - now
             total_seconds = diff.total_seconds()
             
-            if total_seconds < 0:
+            # Clamp to zero to prevent negative display before showing EXPIRED
+            total_seconds = max(0.0, total_seconds)
+            
+            if total_seconds <= 0:
                 time_str = "EXPIRED"
             else:
                 secs = int(total_seconds)
@@ -682,6 +893,8 @@ class FingerBlasterCore:
             await self.market_manager.clear_market()
             await self.history_manager.clear_yes_history()
             await self.ws_manager.stop()
+            # Invalidate price cache on market reset
+            self._invalidate_price_cache()
             # Note: Keep RTDS running for next market
             self.resolution_shown = False
             self._emit('resolution', None)  # Hide overlay
@@ -691,7 +904,7 @@ class FingerBlasterCore:
     async def _check_and_add_prior_outcomes(self) -> None:
         """Check if prior outcomes should be displayed.
         
-        Simplified logic with better error handling.
+        Simplified logic with better error handling and defensive type checking.
         """
         try:
             market = await self.market_manager.get_market()
@@ -715,17 +928,31 @@ class FingerBlasterCore:
             tolerance_seconds = 60.0
             
             # Filter outcomes to only include consecutive ones
-            consecutive_outcomes = []
+            consecutive_outcomes: List[str] = []
             expected_end_time = expected_previous_market_end
             
-            # Iterate backwards through prior_outcomes
+            # Iterate backwards through prior_outcomes with defensive checks
             for outcome_entry in reversed(self.prior_outcomes):
+                # Handle legacy string format
                 if isinstance(outcome_entry, str):
+                    # Legacy format - can't determine timestamp, stop here
                     break
                 
+                # Validate outcome_entry is a dict
+                if not isinstance(outcome_entry, dict):
+                    logger.debug(f"Skipping malformed outcome entry: {type(outcome_entry)}")
+                    continue
+                
+                # Safely get timestamp with validation
                 timestamp_str = outcome_entry.get('timestamp')
-                if not timestamp_str:
+                if not timestamp_str or not isinstance(timestamp_str, str):
+                    logger.debug(f"Missing or invalid timestamp in outcome: {outcome_entry}")
                     break
+                
+                # Safely get outcome value
+                outcome_value = outcome_entry.get('outcome', '')
+                if not isinstance(outcome_value, str):
+                    outcome_value = str(outcome_value) if outcome_value else ''
                 
                 try:
                     outcome_timestamp = pd.Timestamp(timestamp_str)
@@ -737,17 +964,16 @@ class FingerBlasterCore:
                     )
                     
                     if time_diff <= tolerance_seconds:
-                        consecutive_outcomes.insert(
-                            0, outcome_entry.get('outcome', '')
-                        )
+                        if outcome_value:  # Only add non-empty outcomes
+                            consecutive_outcomes.insert(0, outcome_value)
                         expected_end_time = outcome_timestamp - pd.Timedelta(
                             minutes=self.config.market_duration_minutes
                         )
                     else:
                         break
                         
-                except Exception as e:
-                    logger.debug(f"Error processing outcome timestamp: {e}")
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.debug(f"Error processing outcome timestamp '{timestamp_str}': {e}")
                     break
             
             self.displayed_prior_outcomes = consecutive_outcomes
@@ -982,37 +1208,14 @@ class FingerBlasterCore:
             if resp and resp.get('orderID'):
                 self.log_msg(f"Order FILLED: {resp['orderID'][:10]}...")
                 
-                # Update average entry price
-                if side.upper() == 'YES':
-                    # Calculate new average entry price (weighted average)
-                    # For market orders, we estimate shares received: size / entry_price
-                    new_shares = size / entry_price if entry_price > 0 else 0
-                    total_shares = old_yes_bal + new_shares
-                    
-                    if total_shares > 0:
-                        if self.avg_entry_price_yes is not None and old_yes_bal > 0:
-                            # Weighted average: (old_price * old_shares + new_price * new_shares) / total_shares
-                            self.avg_entry_price_yes = (
-                                (self.avg_entry_price_yes * old_yes_bal) + (entry_price * new_shares)
-                            ) / total_shares
-                        else:
-                            # First position or no previous position
-                            self.avg_entry_price_yes = entry_price
-                    else:
-                        self.avg_entry_price_yes = None
-                else:  # NO
-                    new_shares = size / entry_price if entry_price > 0 else 0
-                    total_shares = old_no_bal + new_shares
-                    
-                    if total_shares > 0:
-                        if self.avg_entry_price_no is not None and old_no_bal > 0:
-                            self.avg_entry_price_no = (
-                                (self.avg_entry_price_no * old_no_bal) + (entry_price * new_shares)
-                            ) / total_shares
-                        else:
-                            self.avg_entry_price_no = entry_price
-                    else:
-                        self.avg_entry_price_no = None
+                # Update average entry price with proper validation
+                self._update_average_entry_price(
+                    side=side.upper(),
+                    size=size,
+                    entry_price=entry_price,
+                    old_yes_bal=old_yes_bal,
+                    old_no_bal=old_no_bal
+                )
                 
                 await self.update_account_stats()
             else:
@@ -1020,6 +1223,67 @@ class FingerBlasterCore:
         except Exception as e:
             self.log_msg(f"Execution Error: {e}")
             logger.error(f"Order placement error: {e}", exc_info=True)
+    
+    def _update_average_entry_price(
+        self,
+        side: str,
+        size: float,
+        entry_price: float,
+        old_yes_bal: float,
+        old_no_bal: float
+    ) -> None:
+        """Update average entry price with proper validation.
+        
+        Args:
+            side: Order side ('YES' or 'NO')
+            size: Order size in dollars
+            entry_price: Price paid per share
+            old_yes_bal: YES balance before order
+            old_no_bal: NO balance before order
+        """
+        # Validate entry price to prevent division by zero
+        if entry_price <= 0:
+            logger.warning(
+                f"Invalid entry price {entry_price} for {side} order, "
+                "skipping average calculation"
+            )
+            return
+        
+        # Calculate estimated shares received
+        new_shares = size / entry_price
+        if new_shares <= 0:
+            logger.warning(f"Invalid shares calculation: {new_shares}")
+            return
+        
+        if side == 'YES':
+            total_shares = old_yes_bal + new_shares
+            
+            if total_shares <= 0:
+                self.avg_entry_price_yes = None
+                return
+            
+            if self.avg_entry_price_yes is not None and old_yes_bal > 0:
+                # Weighted average: (old_cost + new_cost) / total_shares
+                old_cost = self.avg_entry_price_yes * old_yes_bal
+                new_cost = entry_price * new_shares
+                self.avg_entry_price_yes = (old_cost + new_cost) / total_shares
+            else:
+                # First position or no previous position
+                self.avg_entry_price_yes = entry_price
+                
+        elif side == 'NO':
+            total_shares = old_no_bal + new_shares
+            
+            if total_shares <= 0:
+                self.avg_entry_price_no = None
+                return
+            
+            if self.avg_entry_price_no is not None and old_no_bal > 0:
+                old_cost = self.avg_entry_price_no * old_no_bal
+                new_cost = entry_price * new_shares
+                self.avg_entry_price_no = (old_cost + new_cost) / total_shares
+            else:
+                self.avg_entry_price_no = entry_price
     
     async def flatten(self) -> None:
         """Flatten all positions with improved error handling."""
@@ -1036,9 +1300,8 @@ class FingerBlasterCore:
             else:
                 self.log_msg("Flatten completed. No orders to process.")
             
-            # Reset average entry prices after flattening
-            self.avg_entry_price_yes = None
-            self.avg_entry_price_no = None
+            # Reset all position tracking after flattening
+            self.position_tracker.reset()
         except Exception as e:
             self.log_msg(f"Flatten error: {e}")
             logger.error(f"Flatten error: {e}", exc_info=True)

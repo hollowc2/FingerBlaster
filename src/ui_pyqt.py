@@ -256,7 +256,10 @@ class StatsPanel(QFrame):
 
 
 class ProbabilityChart(QWidget):
-    """Custom widget for probability history chart with fixed x-axis."""
+    """Custom widget for probability history chart with fixed x-axis.
+    
+    Optimized to reuse line objects instead of full redraws.
+    """
     
     def __init__(self, parent=None, x_max: float = 900.0):
         super().__init__(parent)
@@ -267,26 +270,33 @@ class ProbabilityChart(QWidget):
         self.figure = Figure(figsize=(8, 4), facecolor='black')
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111, facecolor='black')
-        self.ax.set_xlim(1, 15)
-        self.ax.set_ylim(0, 1.0)
-        self.ax.set_xlabel('', color='white')
-        self.ax.set_ylabel('Probability', color='white')
-        self.ax.tick_params(colors='white')
-        # Remove x-axis ticks and labels
-        self.ax.set_xticks([])
-        self.ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
-        self.ax.spines['bottom'].set_color('white')
-        self.ax.spines['top'].set_color('white')
-        self.ax.spines['left'].set_color('white')
-        self.ax.spines['right'].set_color('white')
-        self.ax.grid(True, alpha=0.3, color='gray')
-        self.ax.set_title('PROBABILITY HISTORY', color='#00ffff', fontweight='bold')
+        self._setup_axes()
+        
+        # Cached line object for efficient updates
+        self._prob_line = None
         
         layout.addWidget(self.canvas)
         self.setLayout(layout)
     
+    def _setup_axes(self):
+        """Setup axis styling (called once on init)."""
+        self.ax.set_xlim(1, 15)  # Fixed: 1-15 minutes
+        self.ax.set_ylim(0, 1.0)  # Fixed: 0-100% probability
+        self.ax.set_xlabel('', color='white')
+        self.ax.set_ylabel('Probability', color='white')
+        self.ax.tick_params(colors='white')
+        self.ax.set_xticks([])
+        self.ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
+        for spine in ['bottom', 'top', 'left', 'right']:
+            self.ax.spines[spine].set_color('white')
+        self.ax.grid(True, alpha=0.3, color='gray')
+        self.ax.set_title('PROBABILITY HISTORY', color='#00ffff', fontweight='bold')
+    
     def update_data(self, data: List[Tuple[float, float]]):
-        """Update the chart data."""
+        """Update the chart data efficiently.
+        
+        Uses set_data() on existing line object instead of full redraws.
+        """
         if len(data) < 2:
             return
         
@@ -295,31 +305,24 @@ class ProbabilityChart(QWidget):
         if len(self.data) < 2:
             return
         
-        self.ax.clear()
-        self.ax.set_xlim(1, 15)
-        self.ax.set_ylim(0, 1.0)
-        self.ax.set_xlabel('', color='white')
-        self.ax.set_ylabel('Probability', color='white')
-        self.ax.tick_params(colors='white')
-        # Remove x-axis ticks and labels
-        self.ax.set_xticks([])
-        self.ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
-        self.ax.spines['bottom'].set_color('white')
-        self.ax.spines['top'].set_color('white')
-        self.ax.spines['left'].set_color('white')
-        self.ax.spines['right'].set_color('white')
-        self.ax.grid(True, alpha=0.3, color='gray')
-        self.ax.set_title('PROBABILITY HISTORY', color='#00ffff', fontweight='bold')
-        
         x_vals = [p[0] / 60.0 for p in self.data]  # Convert to minutes
         y_vals = [p[1] for p in self.data]
         
-        self.ax.plot(x_vals, y_vals, color='cyan', linewidth=2)
-        self.canvas.draw()
+        # Update or create probability line
+        if self._prob_line is None:
+            self._prob_line, = self.ax.plot(x_vals, y_vals, color='cyan', linewidth=2)
+        else:
+            self._prob_line.set_data(x_vals, y_vals)
+        
+        # Use draw_idle for better performance
+        self.canvas.draw_idle()
 
 
 class BTCChart(QWidget):
-    """Widget for BTC price history chart."""
+    """Widget for BTC price history chart.
+    
+    Optimized to reuse line objects instead of full redraws.
+    """
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -328,41 +331,39 @@ class BTCChart(QWidget):
         self.figure = Figure(figsize=(8, 4), facecolor='black')
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111, facecolor='black')
-        self.ax.set_xlabel('', color='white')
-        self.ax.set_ylabel('Price ($)', color='white')
-        self.ax.tick_params(colors='white')
-        # Remove x-axis ticks and labels
-        self.ax.set_xticks([])
-        self.ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
-        self.ax.spines['bottom'].set_color('white')
-        self.ax.spines['top'].set_color('white')
-        self.ax.spines['left'].set_color('white')
-        self.ax.spines['right'].set_color('white')
-        self.ax.grid(True, alpha=0.3, color='gray')
-        self.ax.set_title('BTC PRICE HISTORY', color='#00ffff', fontweight='bold')
+        self._setup_axes()
+        
+        # Cached line objects for efficient updates
+        self._btc_line = None
+        self._strike_line = None
+        self._last_ylim = (0, 1)  # Track y-axis limits to avoid unnecessary updates
         
         layout.addWidget(self.canvas)
         self.setLayout(layout)
     
-    def update_data(self, prices: List[float], strike_val: Optional[float] = None):
-        """Update BTC chart data."""
-        if len(prices) < 2:
-            return
-        
-        self.ax.clear()
+    def _setup_axes(self):
+        """Setup axis styling (called once on init)."""
         self.ax.set_xlabel('', color='white')
         self.ax.set_ylabel('Price ($)', color='white')
         self.ax.tick_params(colors='white')
-        # Remove x-axis ticks and labels
         self.ax.set_xticks([])
         self.ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
-        self.ax.spines['bottom'].set_color('white')
-        self.ax.spines['top'].set_color('white')
-        self.ax.spines['left'].set_color('white')
-        self.ax.spines['right'].set_color('white')
+        for spine in ['bottom', 'top', 'left', 'right']:
+            self.ax.spines[spine].set_color('white')
         self.ax.grid(True, alpha=0.3, color='gray')
         self.ax.set_title('BTC PRICE HISTORY', color='#00ffff', fontweight='bold')
+    
+    def update_data(self, prices: List[float], strike_val: Optional[float] = None):
+        """Update BTC chart data efficiently.
         
+        Uses set_data() on existing line objects instead of full redraws.
+        """
+        if len(prices) < 2:
+            return
+        
+        x_data = list(range(len(prices)))
+        
+        # Calculate y-axis limits
         y_min, y_max = min(prices), max(prices)
         if strike_val is not None:
             y_min = min(y_min, strike_val)
@@ -370,14 +371,37 @@ class BTCChart(QWidget):
         
         spread = y_max - y_min
         padding = spread * 0.25 if spread > 0 else 50.0
+        new_ylim = (y_min - padding, y_max + padding)
         
-        self.ax.set_ylim(y_min - padding, y_max + padding)
-        self.ax.plot(prices, color='cyan', linewidth=2, label='BTC')
+        # Update or create BTC line
+        if self._btc_line is None:
+            self._btc_line, = self.ax.plot(x_data, prices, color='cyan', linewidth=2, label='BTC')
+        else:
+            self._btc_line.set_data(x_data, prices)
         
+        # Update or create strike line
         if strike_val is not None:
-            self.ax.axhline(y=strike_val, color='yellow', linestyle='--', linewidth=2, label='STRIKE')
+            if self._strike_line is None:
+                self._strike_line = self.ax.axhline(
+                    y=strike_val, color='yellow', linestyle='--', linewidth=2, label='STRIKE'
+                )
+            else:
+                self._strike_line.set_ydata([strike_val, strike_val])
+        elif self._strike_line is not None:
+            self._strike_line.remove()
+            self._strike_line = None
         
-        self.canvas.draw()
+        # Only update y-limits if they changed significantly (>1% change)
+        if abs(new_ylim[0] - self._last_ylim[0]) > abs(self._last_ylim[0]) * 0.01 or \
+           abs(new_ylim[1] - self._last_ylim[1]) > abs(self._last_ylim[1]) * 0.01:
+            self.ax.set_ylim(new_ylim)
+            self._last_ylim = new_ylim
+        
+        # Update x-limits to match data
+        self.ax.set_xlim(0, len(prices) - 1)
+        
+        # Use draw_idle for better performance (schedules redraw)
+        self.canvas.draw_idle()
 
 
 class ResolutionOverlay(QWidget):

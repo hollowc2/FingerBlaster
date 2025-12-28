@@ -1,7 +1,7 @@
 """UI components for the FingerBlaster application."""
 
 import logging
-from typing import List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 from textual.widgets import Static, Label, Digits
 from textual.containers import Vertical, Center
@@ -71,6 +71,7 @@ class PricePanel(Vertical):
         """Compose the price panel UI."""
         yield Label("LIVE PRICES", classes="title")
         yield Label("SPREAD: 0.00 / 0.00", id="yes_spread_label", classes="spread_label")
+        yield Label("")  # Empty line for spacing
         yield Label("YES", classes="price_label")
         yield Center(Digits("0.00", id="yes_digits", classes="price_yes"))
         yield Label("NO", classes="price_label")
@@ -149,12 +150,23 @@ class ProbabilityChart(Static):
         self.data: List[Tuple[float, float]] = []  # List of (x, y) tuples
     
     def update_data(self, data: List[Tuple[float, float]]) -> None:
-        """Update the chart data and refresh."""
+        """Update the chart data and refresh.
+        
+        Filters, deduplicates by timestamp, and sorts the data.
+        """
         # Filter to only include data within the fixed x-axis range (0 to x_max)
-        # Sort by x (time) to ensure chronological order
-        # This prevents the tail from disappearing and ensures proper rendering
         filtered = [(x, y) for x, y in data if 0 <= x <= self.x_max]
-        self.data = sorted(filtered, key=lambda p: p[0])
+        
+        # Deduplicate by timestamp (keep last value for each timestamp)
+        # This prevents rendering issues from duplicate points
+        seen_timestamps: Dict[float, float] = {}
+        for x, y in filtered:
+            # Round to 1 decimal place to group nearby timestamps
+            rounded_x = round(x, 1)
+            seen_timestamps[rounded_x] = y
+        
+        # Convert back to sorted list
+        self.data = sorted(seen_timestamps.items(), key=lambda p: p[0])
         self.refresh()
     
     def render(self) -> str:

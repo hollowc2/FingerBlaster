@@ -444,12 +444,8 @@ class FingerBlasterPyQtApp(QMainWindow):
     
     def _on_price_update_sync(self, yes_price: float, no_price: float, best_bid: float, best_ask: float):
         """Handle price update from core."""
-        # YES spread is in YES terms: best_bid / best_ask
-        yes_spread = f"{best_bid:.2f} / {best_ask:.2f}"
-        # NO spread is in NO terms: (1 - best_ask) / (1 - best_bid)
-        no_best_bid = 1.0 - best_ask if best_ask < 1.0 else 0.0
-        no_best_ask = 1.0 - best_bid if best_bid > 0.0 else 1.0
-        no_spread = f"{no_best_bid:.2f} / {no_best_ask:.2f}"
+        # Use centralized spread calculation from core
+        yes_spread, no_spread = self.core.calculate_spreads(best_bid, best_ask)
         self.signals.prices.emit(yes_price, no_price, yes_spread, no_spread)
     
     def _on_account_stats_update_sync(self, balance: float, yes_balance: float, no_balance: float, size: float, 
