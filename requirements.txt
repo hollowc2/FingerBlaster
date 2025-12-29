@@ -11,4 +11,6 @@ matplotlib
 fastapi
 uvicorn[standard]
 pydantic
+slowapi
+python-multipart
 
