@@ -9,9 +9,7 @@ Key improvements:
 """
 
 import asyncio
-import json
 import logging
-import os
 import time
 import threading
 from collections.abc import Callable
@@ -325,7 +323,6 @@ class FingerBlasterCore:
         # State
         self.resolution_shown = False
         self.last_resolution: Optional[str] = None
-        self.prior_outcomes: List[Dict[str, Any]] = []
         self.displayed_prior_outcomes: List[str] = []
         self.last_chart_update: float = 0.0
         self.selected_size: float = 1.0
@@ -344,11 +341,10 @@ class FingerBlasterCore:
         self._cache_ttl: float = 0.1  # 100ms cache
         self._cached_market_id: Optional[str] = None  # Track market for cache invalidation
         
-        # Load prior outcomes
-        try:
-            self._load_prior_outcomes()
-        except Exception as exc:
-            logger.warning("Could not load prior outcomes: %s", exc)
+        # Cache for prior outcomes from API (refresh periodically)
+        self._prior_outcomes_cache: List[Dict[str, Any]] = []
+        self._prior_outcomes_cache_timestamp: float = 0.0
+        self._prior_outcomes_cache_ttl: float = 60.0  # Cache for 60 seconds
     
     # Backward-compatible property accessors for position tracking
     @property
@@ -702,8 +698,10 @@ class FingerBlasterCore:
                         # Reset countdown display
                         await self.update_countdown()
                         
-                        # Re-check prior outcomes
-                        await self._check_and_add_prior_outcomes()
+                        # Re-check prior outcomes after a short delay
+                        # (API may not have updated immediately after market close)
+                        await asyncio.sleep(2.0)
+                        await self._check_and_add_prior_outcomes(retry_count=3)
             except Exception as e:
                 logger.error(f"Error searching for market: {e}", exc_info=True)
                 # Recovery: retry after delay
@@ -873,12 +871,8 @@ class FingerBlasterCore:
                     no_position = self.connector.get_token_balance(n_id)
             
             # Get prior outcomes for regime detection
-            outcomes_list = []
-            for o in self.prior_outcomes:
-                if isinstance(o, str):
-                    outcomes_list.append(o)
-                elif isinstance(o, dict):
-                    outcomes_list.append(o.get('outcome', ''))
+            prior_outcomes_data = await self._get_prior_outcomes()
+            outcomes_list = [o.get('outcome', '') for o in prior_outcomes_data if isinstance(o, dict)]
             
             # Update oracle lag with CEX price
             chainlink_price = self.rtds_manager.get_chainlink_price()
@@ -952,46 +946,132 @@ class FingerBlasterCore:
     async def _show_resolution(self) -> None:
         """Calculate and emit resolution with improved error handling.
         
-        Uses RTDS BTC price for accurate resolution matching Polymarket.
+        Uses Chainlink BTC price at market end time for accurate resolution.
+        
+        IMPORTANT: Polymarket resolves based on Chainlink price at the exact
+        market end timestamp, not the current price. We try to match this.
         """
         try:
             market = await self.market_manager.get_market()
             if not market:
                 return
             
-            # Get BTC price - prefer RTDS (matches Polymarket), fallback to history
+            # Get market end time for accurate price lookup
+            end_str = market.get('end_date')
+            market_end_time = None
+            if end_str:
+                market_end_time = pd.Timestamp(end_str)
+                if market_end_time.tz is None:
+                    market_end_time = market_end_time.tz_localize('UTC')
+            
+            # Get BTC price - try multiple sources in order of accuracy
             btc_price = None
-            rtds_price = self.rtds_manager.get_current_price()
-            if rtds_price and rtds_price > 0:
-                btc_price = rtds_price
-                logger.info(f"Using RTDS price for resolution: ${btc_price:,.2f}")
-            else:
-                # Fallback to history
+            price_source = "unknown"
+            
+            # 1. Try to get Chainlink price at market end time (most accurate)
+            if market_end_time:
+                # Log the exact timestamp we're looking for
+                logger.info(f"Looking up Chainlink price at market end: {market_end_time} (epoch: {int(market_end_time.timestamp() * 1000)}ms)")
+                
+                chainlink_at_end = self.rtds_manager.get_chainlink_price_at(market_end_time)
+                if chainlink_at_end and chainlink_at_end > 0:
+                    btc_price = chainlink_at_end
+                    price_source = f"Chainlink@{market_end_time.strftime('%H:%M:%S')} UTC"
+                    logger.info(f"Using Chainlink price at market end: ${btc_price:,.2f}")
+            
+            # 2. Fallback to current Chainlink price
+            if not btc_price:
+                chainlink_current = self.rtds_manager.get_chainlink_price()
+                if chainlink_current and chainlink_current > 0:
+                    btc_price = chainlink_current
+                    price_source = "Chainlink (current)"
+                    logger.info(f"Using current Chainlink price: ${btc_price:,.2f}")
+            
+            # 3. Fallback to any RTDS price
+            if not btc_price:
+                rtds_price = self.rtds_manager.get_current_price()
+                if rtds_price and rtds_price > 0:
+                    btc_price = rtds_price
+                    price_source = "RTDS (Binance)"
+                    logger.warning(f"Chainlink unavailable, using RTDS: ${btc_price:,.2f}")
+            
+            # 4. Last resort: history
+            if not btc_price:
                 btc_history = await self.history_manager.get_btc_history()
                 btc_price = btc_history[-1] if btc_history else 0.0
-                logger.info(f"Using history price for resolution: ${btc_price:,.2f}")
+                price_source = "History (fallback)"
+                logger.warning(f"Using history fallback price: ${btc_price:,.2f}")
             
             if btc_price <= 0:
                 logger.error("Invalid BTC price for resolution")
                 return
             
+            # Get and validate strike
             strike_str = str(market.get('strike_price', '')).replace(',', '').replace('$', '').strip()
             strike_val = self._parse_strike(strike_str)
+            strike_source = market.get('_strike_source', 'API')
 
             if strike_val is None:
                 logger.warning("Strike unavailable or unparseable (%s); resolution deferred", strike_str)
                 self._emit('resolution', None)
                 return
 
+            # Calculate resolution
+            # Polymarket: YES wins if BTC >= Strike at market end
             resolution = "YES" if btc_price >= strike_val else "NO"
+            
+            # Log detailed resolution info for debugging
+            diff = btc_price - strike_val
+            diff_bps = (diff / strike_val) * 10000 if strike_val > 0 else 0
+            
+            logger.info(f"=== RESOLUTION DETAILS ===")
+            logger.info(f"  BTC Price: ${btc_price:,.2f} (source: {price_source})")
+            logger.info(f"  Strike:    ${strike_val:,.2f} (source: {strike_source})")
+            logger.info(f"  Diff:      ${diff:+,.2f} ({diff_bps:+.0f} bps)")
+            logger.info(f"  Result:    {resolution} ({'BTC >= Strike' if resolution == 'YES' else 'BTC < Strike'})")
+            logger.info(f"===========================")
+            
+            # Query Polymarket's actual resolution for comparison
+            market_id = market.get('market_id')
+            polymarket_resolution = None
+            if market_id:
+                try:
+                    pm_result = await asyncio.to_thread(
+                        self.connector.get_market_resolution, market_id
+                    )
+                    if pm_result and pm_result.get('resolved'):
+                        polymarket_resolution = pm_result.get('resolution') or pm_result.get('winner')
+                        pm_strike = pm_result.get('strike')
+                        pm_price = pm_result.get('resolution_price')
+                        
+                        logger.info(f"Polymarket API resolution: {polymarket_resolution}")
+                        if pm_strike:
+                            logger.info(f"Polymarket API strike: {pm_strike}")
+                        if pm_price:
+                            logger.info(f"Polymarket resolution price: {pm_price}")
+                        
+                        # Check for discrepancy
+                        if polymarket_resolution and polymarket_resolution.upper() != resolution:
+                            logger.error(f"!!! RESOLUTION MISMATCH !!!")
+                            logger.error(f"  Our calculation: {resolution}")
+                            logger.error(f"  Polymarket says: {polymarket_resolution}")
+                            logger.error(f"  Our BTC: ${btc_price:,.2f}, Our Strike: ${strike_val:,.2f}")
+                            if pm_strike:
+                                logger.error(f"  PM Strike: {pm_strike}")
+                            self.log_msg(f"⚠️ RESOLUTION MISMATCH: We said {resolution}, PM says {polymarket_resolution}")
+                            # Use Polymarket's resolution since they're authoritative
+                            resolution = polymarket_resolution.upper()
+                except Exception as e:
+                    logger.debug(f"Could not query Polymarket resolution: {e}")
             
             self.last_resolution = resolution
             direction = "UP" if resolution == "YES" else "DOWN"
+            diff = btc_price - strike_val
             self.log_msg(
                 f"Market Resolved: {resolution} "
-                f"(BTC: ${btc_price:,.2f} vs Strike: {strike_str})"
+                f"(BTC: ${btc_price:,.2f} vs Strike: ${strike_val:,.2f}, diff: ${diff:+,.2f})"
             )
-            self.log_msg(f"Market resolved {direction}")
+            self.log_msg(f"Market resolved {direction} | Price source: {price_source}")
             self._emit('resolution', resolution)
         except Exception as e:
             logger.error(f"Error showing resolution: {e}", exc_info=True)
@@ -999,10 +1079,25 @@ class FingerBlasterCore:
     async def _reset_market_after_resolution(self) -> None:
         """Reset market state after resolution with proper cleanup."""
         try:
+            # Prepend the just-resolved outcome to displayed prior outcomes
+            # This is more reliable than waiting for the API to update
             if self.last_resolution:
-                market = await self.market_manager.get_market()
-                await self._add_prior_outcome(self.last_resolution, market)
-                self.last_resolution = None
+                # Insert at beginning (most recent first for display)
+                self.displayed_prior_outcomes.insert(0, self.last_resolution)
+                
+                # Trim to max length
+                max_outcomes = self.config.max_prior_outcomes
+                if len(self.displayed_prior_outcomes) > max_outcomes:
+                    self.displayed_prior_outcomes = self.displayed_prior_outcomes[:max_outcomes]
+                
+                # Update display immediately
+                self._update_prior_outcomes_display()
+                
+                # Log the update
+                arrows = ''.join(['▲' if o == 'YES' else '▼' for o in self.displayed_prior_outcomes])
+                logger.info(f"Added {self.last_resolution} to prior outcomes: {arrows}")
+            
+            self.last_resolution = None
             
             self.log_msg("Clearing expired market...")
             await self.market_manager.clear_market()
@@ -1012,206 +1107,222 @@ class FingerBlasterCore:
             self._invalidate_price_cache()
             # Reset analytics for new market
             self.analytics_engine.reset()
+            # Don't invalidate prior outcomes cache - we've already added the latest outcome
+            # The cache will naturally expire or be refreshed on next API call
             # Note: Keep RTDS running for next market
             self.resolution_shown = False
             self._emit('resolution', None)  # Hide overlay
         except Exception as e:
             logger.error(f"Error resetting market: {e}", exc_info=True)
     
-    async def _check_and_add_prior_outcomes(self) -> None:
-        """Check if prior outcomes should be displayed.
+    async def _check_and_add_prior_outcomes(self, retry_count: int = 0) -> None:
+        """Check and fetch prior outcomes from Polymarket API.
         
-        Simplified logic with better error handling and defensive type checking.
+        Fetches closed markets from Polymarket and validates that they align
+        with the current market's time window. Only displays outcomes that
+        are consecutive and properly timed relative to the current market.
+        
+        Args:
+            retry_count: Number of retries if no matching outcomes found (for API propagation delay)
         """
         try:
             market = await self.market_manager.get_market()
-            if not market or not self.prior_outcomes:
+            if not market:
+                logger.debug("No market found, clearing prior outcomes")
                 self.displayed_prior_outcomes = []
                 self._update_prior_outcomes_display()
                 return
             
             market_start_time = await self.market_manager.get_market_start_time()
             if not market_start_time:
+                logger.debug("No market start time, clearing prior outcomes")
                 self.displayed_prior_outcomes = []
                 self._update_prior_outcomes_display()
                 return
             
-            # Calculate expected previous market end time
-            expected_previous_market_end = market_start_time - pd.Timedelta(
-                minutes=self.config.market_duration_minutes
+            logger.info(f"Checking prior outcomes for market starting at {market_start_time}")
+            
+            # Fetch prior outcomes from API (cached)
+            prior_outcomes_data = await self._get_prior_outcomes()
+            
+            if not prior_outcomes_data:
+                logger.warning("No prior outcomes data returned from API")
+                self.displayed_prior_outcomes = []
+                self._update_prior_outcomes_display()
+                return
+            
+            logger.info(f"Fetched {len(prior_outcomes_data)} prior outcomes from API")
+            
+            # The previous market should have ended when the current market started
+            # (markets are consecutive: previous ends at T, current starts at T)
+            expected_previous_market_end = market_start_time
+            
+            # Tolerance for time matching (configurable)
+            tolerance_seconds = self.config.prior_outcome_tolerance_seconds
+            
+            logger.info(
+                f"Expected previous market end: {expected_previous_market_end}, "
+                f"tolerance: ±{tolerance_seconds}s"
             )
             
-            # Tolerance for time matching (1 minute)
-            tolerance_seconds = 60.0
-            
-            # Filter outcomes to only include consecutive ones
+            # Filter outcomes to only include consecutive ones that match time windows
             consecutive_outcomes: List[str] = []
             expected_end_time = expected_previous_market_end
             
-            # Iterate backwards through prior_outcomes with defensive checks
-            for outcome_entry in reversed(self.prior_outcomes):
-                # Handle legacy string format
-                if isinstance(outcome_entry, str):
-                    # Legacy format - can't determine timestamp, stop here
-                    break
-                
-                # Validate outcome_entry is a dict
+            # Iterate through prior outcomes from API
+            for idx, outcome_entry in enumerate(prior_outcomes_data):
                 if not isinstance(outcome_entry, dict):
-                    logger.debug(f"Skipping malformed outcome entry: {type(outcome_entry)}")
                     continue
                 
-                # Safely get timestamp with validation
-                timestamp_str = outcome_entry.get('timestamp')
-                if not timestamp_str or not isinstance(timestamp_str, str):
-                    logger.debug(f"Missing or invalid timestamp in outcome: {outcome_entry}")
-                    break
-                
-                # Safely get outcome value
+                # Get outcome value
                 outcome_value = outcome_entry.get('outcome', '')
-                if not isinstance(outcome_value, str):
-                    outcome_value = str(outcome_value) if outcome_value else ''
+                if not isinstance(outcome_value, str) or not outcome_value:
+                    continue
                 
-                try:
-                    outcome_timestamp = pd.Timestamp(timestamp_str)
-                    if outcome_timestamp.tz is None:
-                        outcome_timestamp = outcome_timestamp.tz_localize('UTC')
-                    
-                    time_diff = abs(
-                        (outcome_timestamp - expected_end_time).total_seconds()
-                    )
-                    
-                    if time_diff <= tolerance_seconds:
-                        if outcome_value:  # Only add non-empty outcomes
-                            consecutive_outcomes.insert(0, outcome_value)
-                        expected_end_time = outcome_timestamp - pd.Timedelta(
-                            minutes=self.config.market_duration_minutes
-                        )
-                    else:
+                # Get and validate timestamp
+                outcome_timestamp = outcome_entry.get('end_timestamp')
+                if not outcome_timestamp:
+                    # Try parsing from end_date string
+                    end_date_str = outcome_entry.get('end_date')
+                    if not end_date_str:
                         break
-                        
-                except (ValueError, TypeError, AttributeError) as e:
-                    logger.debug(f"Error processing outcome timestamp '{timestamp_str}': {e}")
+                    
+                    try:
+                        outcome_timestamp = pd.Timestamp(end_date_str)
+                        if outcome_timestamp.tz is None:
+                            outcome_timestamp = outcome_timestamp.tz_localize('UTC')
+                    except (ValueError, TypeError) as e:
+                        logger.debug(f"Error parsing timestamp: {e}")
+                        break
+                
+                # Check if this outcome's time matches expected time window
+                time_diff = abs((outcome_timestamp - expected_end_time).total_seconds())
+                
+                logger.debug(
+                    f"Outcome {idx+1}: {outcome_value} at {outcome_timestamp}, "
+                    f"expected {expected_end_time}, diff: {time_diff:.1f}s"
+                )
+                
+                if time_diff <= tolerance_seconds:
+                    # This outcome is part of the consecutive chain
+                    consecutive_outcomes.append(outcome_value)
+                    logger.debug(f"  ✓ Added to chain (diff: {time_diff:.1f}s)")
+                    
+                    # Update expected time for next iteration (going backwards)
+                    expected_end_time = outcome_timestamp - pd.Timedelta(
+                        minutes=self.config.market_duration_minutes
+                    )
+                else:
+                    # Time window doesn't match - stop here
+                    logger.info(
+                        f"  ✗ Stopping chain at outcome {idx+1} "
+                        f"(time diff {time_diff:.1f}s exceeds tolerance {tolerance_seconds}s)"
+                    )
                     break
-            
-            self.displayed_prior_outcomes = consecutive_outcomes
-            self._update_prior_outcomes_display()
             
             if consecutive_outcomes:
+                # Update displayed outcomes with API data
+                self.displayed_prior_outcomes = consecutive_outcomes
+                self._update_prior_outcomes_display()
+                
+                # Build arrow string for log message
+                arrows = ''.join(['▲' if o == 'YES' else '▼' for o in consecutive_outcomes])
                 self.log_msg(
-                    f"Displaying {len(consecutive_outcomes)} "
-                    f"consecutive prior outcome(s)"
+                    f"Prior outcomes loaded: {arrows} ({len(consecutive_outcomes)} markets)"
                 )
+            else:
+                # No matches found - might be API propagation delay after market close
+                # Keep existing displayed_prior_outcomes (don't clear them!)
+                
+                if retry_count > 0 and prior_outcomes_data:
+                    # Log what we're seeing for debugging
+                    first_end = prior_outcomes_data[0].get('end_timestamp')
+                    logger.info(
+                        f"API's most recent closed market ended at {first_end}, "
+                        f"but we expect {expected_previous_market_end}. "
+                        f"Retrying in 3s... ({retry_count} retries left)"
+                    )
                     
+                    # Wait and retry - API might not have updated yet
+                    await asyncio.sleep(3.0)
+                    # Invalidate cache to force fresh fetch
+                    self._prior_outcomes_cache = []
+                    self._prior_outcomes_cache_timestamp = 0.0
+                    await self._check_and_add_prior_outcomes(retry_count=retry_count - 1)
+                    return
+                
+                # If we still have displayed outcomes (from resolution), keep them
+                if self.displayed_prior_outcomes:
+                    logger.info(
+                        f"API not yet updated, keeping existing {len(self.displayed_prior_outcomes)} prior outcomes"
+                    )
+                elif prior_outcomes_data:
+                    first_end = prior_outcomes_data[0].get('end_timestamp')
+                    self.log_msg(
+                        f"No consecutive prior outcomes matched time window "
+                        f"(API latest: {first_end}, expected: {expected_previous_market_end})"
+                    )
+                else:
+                    self.log_msg("No prior outcomes available from API")
+        
         except Exception as e:
-            logger.debug(f"Error in _check_and_add_prior_outcomes: {e}", exc_info=True)
+            logger.error(f"Error in _check_and_add_prior_outcomes: {e}", exc_info=True)
             self.displayed_prior_outcomes = []
             self._update_prior_outcomes_display()
+            # Log the error to user
+            self.log_msg(f"Error fetching prior outcomes: {e}")
+    
+    async def _get_prior_outcomes(self) -> List[Dict[str, Any]]:
+        """Get prior outcomes from Polymarket API with caching.
+        
+        Fetches closed markets from Polymarket's Gamma API and caches results
+        for a short period to avoid excessive API calls.
+        
+        Returns:
+            List of closed market outcome dictionaries
+        """
+        now = time.time()
+        
+        # Return cached data if recent
+        if (self._prior_outcomes_cache and 
+            now - self._prior_outcomes_cache_timestamp < self._prior_outcomes_cache_ttl):
+            return self._prior_outcomes_cache
+        
+        # Fetch fresh data from API
+        try:
+            closed_markets = await asyncio.to_thread(
+                self.connector.get_closed_markets,
+                series_id="10192",  # BTC 15m series
+                limit=20,  # Get last 20 markets (more than enough for max_prior_outcomes)
+                ascending=False  # Most recent first
+            )
+            
+            if closed_markets:
+                # Update cache
+                self._prior_outcomes_cache = closed_markets
+                self._prior_outcomes_cache_timestamp = now
+                logger.info(f"Fetched {len(closed_markets)} closed markets from API")
+                # Log sample for debugging
+                if closed_markets:
+                    sample = closed_markets[0]
+                    logger.debug(
+                        f"Sample market: outcome={sample.get('outcome')}, "
+                        f"end_date={sample.get('end_date')}"
+                    )
+            else:
+                logger.warning("No closed markets returned from API")
+            
+            return closed_markets
+        
+        except Exception as e:
+            logger.error(f"Error fetching prior outcomes from API: {e}", exc_info=True)
+            # Return cached data if available, even if stale
+            return self._prior_outcomes_cache if self._prior_outcomes_cache else []
     
     def _update_prior_outcomes_display(self) -> None:
-        """Update prior outcomes display."""
-        outcomes_to_display = (
-            self.displayed_prior_outcomes 
-            if self.displayed_prior_outcomes 
-            else [
-                (outcome_entry if isinstance(outcome_entry, str) 
-                 else outcome_entry.get('outcome', ''))
-                for outcome_entry in self.prior_outcomes
-            ]
-        )
-        self._emit('prior_outcomes_update', outcomes_to_display)
-    
-    async def _add_prior_outcome(
-        self, 
-        outcome: str, 
-        market: Optional[Dict[str, Any]] = None
-    ) -> None:
-        """Add outcome to prior outcomes list with timestamp.
-        
-        Args:
-            outcome: Outcome string ('YES' or 'NO')
-            market: Optional market data dictionary
-        """
-        outcome_upper = outcome.upper()
-        if outcome_upper not in ("YES", "NO"):
-            logger.warning(f"Invalid outcome: {outcome}")
-            return
-        
-        if market is None:
-            market = await self.market_manager.get_market()
-        
-        timestamp = None
-        if market and market.get('end_date'):
-            try:
-                end_dt = pd.Timestamp(market.get('end_date'))
-                if end_dt.tz is None:
-                    end_dt = end_dt.tz_localize('UTC')
-                timestamp = end_dt.isoformat()
-            except Exception as e:
-                logger.debug(f"Error getting timestamp for outcome: {e}")
-        
-        if not timestamp:
-            timestamp = pd.Timestamp.now(tz='UTC').isoformat()
-        
-        outcome_entry = {
-            'outcome': outcome_upper,
-            'timestamp': timestamp
-        }
-        self.prior_outcomes.append(outcome_entry)
-        
-        # Limit size
-        if len(self.prior_outcomes) > self.config.max_prior_outcomes:
-            self.prior_outcomes.pop(0)
-        
-        logger.info(f"Saving prior outcome: {outcome_upper} at {timestamp} (total: {len(self.prior_outcomes)})")
-        self._save_prior_outcomes()
-        self._update_prior_outcomes_display()
-    
-    def _load_prior_outcomes(self) -> None:
-        """Load prior outcomes from file with improved error handling."""
-        try:
-            file_path = self.config.prior_outcomes_file
-            if not os.path.exists(file_path):
-                self.prior_outcomes = []
-                return
-            
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                outcomes = data.get('outcomes', [])
-                
-                normalized_outcomes = []
-                for outcome in outcomes:
-                    if isinstance(outcome, str):
-                        normalized_outcomes.append({
-                            'outcome': outcome,
-                            'timestamp': None
-                        })
-                    elif isinstance(outcome, dict):
-                        normalized_outcomes.append(outcome)
-                
-                self.prior_outcomes = normalized_outcomes[:self.config.max_prior_outcomes]
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in prior outcomes file: {e}")
-            self.prior_outcomes = []
-        except Exception as e:
-            logger.error(f"Error loading prior outcomes: {e}", exc_info=True)
-            self.prior_outcomes = []
-    
-    def _save_prior_outcomes(self) -> None:
-        """Save prior outcomes to file with improved error handling."""
-        try:
-            os.makedirs(self.config.data_dir, exist_ok=True)
-            file_path = self.config.prior_outcomes_file
-            
-            # Write to temporary file first, then rename (atomic operation)
-            temp_path = f"{file_path}.tmp"
-            with open(temp_path, 'w', encoding='utf-8') as f:
-                json.dump({'outcomes': self.prior_outcomes}, f, indent=2)
-            
-            # Atomic rename
-            os.replace(temp_path, file_path)
-            logger.debug(f"Successfully saved {len(self.prior_outcomes)} prior outcomes to {file_path}")
-        except Exception as e:
-            logger.error(f"Error saving prior outcomes: {e}", exc_info=True)
+        """Update prior outcomes display by emitting to UI."""
+        # Simply emit the displayed outcomes list
+        self._emit('prior_outcomes_update', self.displayed_prior_outcomes)
     
     def _format_ends(self, end_str: str) -> str:
         """Format end date to PST with improved error handling.

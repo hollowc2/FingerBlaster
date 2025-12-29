@@ -77,8 +77,10 @@ class AppConfig:
     # =========================================================================
     data_dir: str = "data"
     log_file: str = "data/finger_blaster.log"
-    prior_outcomes_file: str = "data/prior_outcomes.json"
-    max_prior_outcomes: int = 10  # Maximum prior outcomes to store/display
+    
+    # Prior outcomes (fetched from Polymarket API)
+    max_prior_outcomes: int = 10  # Maximum prior outcomes to display
+    prior_outcomes_cache_ttl_seconds: float = 60.0  # Cache API results for 60 seconds
     
     # =========================================================================
     # Update intervals (seconds)

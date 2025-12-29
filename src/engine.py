@@ -1041,8 +1041,23 @@ class RTDSManager:
                 closest_ts = ts
         
         if closest_ts is not None:
-            logger.debug(f"Found Chainlink price at {timestamp} (closest match, diff: {closest_diff}ms)")
-            return self.chainlink_price_history[closest_ts]
+            found_price = self.chainlink_price_history[closest_ts]
+            logger.info(
+                f"Chainlink price lookup: requested {timestamp_ms}ms, "
+                f"found {closest_ts}ms (diff: {closest_diff}ms), price: ${found_price:,.2f}"
+            )
+            return found_price
+        
+        # Log available timestamps for debugging
+        if self.chainlink_price_history:
+            available_ts = sorted(self.chainlink_price_history.keys())
+            logger.warning(
+                f"No Chainlink price found at {timestamp_ms}ms. "
+                f"Available range: {available_ts[0]}ms to {available_ts[-1]}ms "
+                f"({len(available_ts)} entries)"
+            )
+        else:
+            logger.warning(f"Chainlink price history is empty, cannot look up {timestamp_ms}ms")
         
         return None
 

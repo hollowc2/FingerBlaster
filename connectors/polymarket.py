@@ -405,10 +405,10 @@ class PolymarketConnector(DataConnector):
                     logger.debug(f"Event.{key} = {event[key]}")
             self._logged_fields = True
         
-        # Strategy 0: Check groupItemThreshold FIRST (this is likely the strike price Polymarket uses!)
+        # Strategy 0: Check groupItemThreshold FIRST (this is the strike price Polymarket uses!)
         if 'groupItemThreshold' in market:
             threshold = market.get('groupItemThreshold')
-            logger.debug(f"Checking groupItemThreshold value: {threshold} (type: {type(threshold)})")
+            logger.info(f"groupItemThreshold raw value: {threshold} (type: {type(threshold)})")
             if threshold is not None:
                 try:
                     # Handle both string and numeric types
@@ -420,14 +420,14 @@ class PolymarketConnector(DataConnector):
                         threshold_val = float(threshold)
                     
                     if threshold_val > 0:
-                        logger.info(f"✓ Found strike in groupItemThreshold: {threshold_val:,.2f}")
+                        logger.info(f"✓ STRIKE from groupItemThreshold: ${threshold_val:,.2f}")
                         return f"{threshold_val:,.2f}"
                     else:
-                        logger.debug(f"groupItemThreshold is zero or negative: {threshold_val}")
+                        logger.warning(f"groupItemThreshold is zero or negative: {threshold_val}")
                 except (ValueError, TypeError) as e:
-                    logger.debug(f"Could not parse groupItemThreshold '{threshold}': {e}")
+                    logger.warning(f"Could not parse groupItemThreshold '{threshold}': {e}")
         else:
-            logger.debug("groupItemThreshold not found in market data")
+            logger.warning("groupItemThreshold NOT FOUND in market data - strike may be inaccurate!")
         
         # Strategy 1: Check for explicit strike/resolutionCriteria field
         if 'resolutionCriteria' in market:
@@ -1071,6 +1071,48 @@ class PolymarketConnector(DataConnector):
             logger.debug(f"Error parsing Chainlink price: {e}")
             return None
     
+    def get_market_resolution(self, market_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Query Polymarket API for actual market resolution details.
+        
+        Args:
+            market_id: Market ID to query
+            
+        Returns:
+            Resolution data including outcome, price used, etc.
+        """
+        try:
+            # Try the market endpoint to get resolution info
+            url = f"{self.gamma_url}/markets/{market_id}"
+            response = self.session.get(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            # Extract resolution info
+            result = {
+                'market_id': market_id,
+                'resolved': data.get('resolved', False),
+                'resolution': data.get('resolution'),  # Could be 'YES' or 'NO'
+                'winner': data.get('winner'),
+                'resolution_price': data.get('resolutionPrice'),
+                'strike': data.get('groupItemThreshold'),
+            }
+            
+            # Also check for outcome prices (1.0 = won, 0.0 = lost)
+            if 'outcomePrices' in data:
+                result['outcome_prices'] = data['outcomePrices']
+            
+            logger.info(f"Market resolution query: {result}")
+            return result
+            
+        except requests.RequestException as e:
+            logger.debug(f"Could not query market resolution: {e}")
+            return None
+        except Exception as e:
+            logger.debug(f"Error parsing market resolution: {e}")
+            return None
+    
     def get_btc_price_at(self, timestamp: pd.Timestamp) -> str:
         """
         Fetch BTC price at a specific timestamp from Binance.
@@ -1459,5 +1501,327 @@ class PolymarketConnector(DataConnector):
             return self.client.get_order(order_id)
         except Exception as e:
             logger.error(f"Error getting order status: {e}")
+            return None
+    
+    def get_closed_markets(
+        self, 
+        series_id: str = "10192", 
+        limit: int = 20,
+        ascending: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch closed (resolved) markets from Gamma API.
+        
+        This returns historical market results to determine prior outcomes.
+        The markets are filtered by series_id (15-minute BTC markets) and 
+        sorted by most recent first by default.
+        
+        Args:
+            series_id: Series ID (default: "10192" for BTC Up or Down 15m)
+            limit: Maximum number of results to return (default: 20)
+            ascending: If False, returns most recent first (default: False)
+            
+        Returns:
+            List of closed market data dictionaries with outcome information
+        """
+        try:
+            # Try /events endpoint first (better structure with markets nested in events)
+            events_url = f"{self.gamma_url}/events"
+            events_params = {
+                'closed': 'true',
+                'limit': limit,
+                'series_id': series_id,
+                'order': 'endDate',
+                'ascending': 'false',  # Most recent first
+            }
+            
+            logger.debug(f"Querying {events_url} with params: {events_params}")
+            
+            events_response = self.session.get(
+                events_url,
+                params=events_params,
+                timeout=NetworkConstants.REQUEST_TIMEOUT
+            )
+            events_response.raise_for_status()
+            
+            events_data = events_response.json()
+            
+            # Extract markets from events and attach event data to each market
+            markets = []
+            if isinstance(events_data, list):
+                for event in events_data:
+                    if isinstance(event, dict) and 'markets' in event:
+                        event_markets = event.get('markets', [])
+                        if isinstance(event_markets, list):
+                            # Attach event endDate to each market for timing
+                            for mkt in event_markets:
+                                if isinstance(mkt, dict):
+                                    # Store event reference for endDate fallback
+                                    mkt['_event'] = event
+                            markets.extend(event_markets)
+            
+            # Fallback to /markets endpoint if events didn't work
+            if not markets or not isinstance(markets, list) or len(markets) == 0:
+                logger.info(f"/events endpoint returned no markets, trying /markets endpoint...")
+                
+                url = f"{self.gamma_url}/markets"
+                params = {
+                    'closed': 'true',
+                    'limit': limit,
+                    'ascending': str(ascending).lower(),
+                    'series_id': series_id
+                }
+                
+                logger.debug(f"Querying {url} with params: {params}")
+                
+                response = self.session.get(
+                    url, 
+                    params=params, 
+                    timeout=NetworkConstants.REQUEST_TIMEOUT
+                )
+                response.raise_for_status()
+                
+                data = response.json()
+                
+                # Handle different response formats
+                if isinstance(data, list):
+                    markets = data
+                elif isinstance(data, dict):
+                    # Some APIs return { "data": [...], "markets": [...], etc }
+                    markets = data.get('data', data.get('markets', data.get('results', [])))
+            
+            if not markets or not isinstance(markets, list) or len(markets) == 0:
+                logger.warning(
+                    f"No closed markets found for series ID: {series_id} from either endpoint."
+                )
+                return []
+            
+            logger.info(f"API returned {len(markets)} raw markets, parsing...")
+            
+            # Parse each market to extract outcome and timing information
+            parsed_markets = []
+            for idx, market in enumerate(markets):
+                try:
+                    # If market is nested in an event, extract it
+                    if isinstance(market, dict) and 'markets' in market:
+                        # This is an event, get the first market
+                        nested_markets = market.get('markets', [])
+                        if nested_markets:
+                            market = nested_markets[0]
+                    
+                    parsed_market = self._parse_closed_market(market)
+                    if parsed_market:
+                        parsed_markets.append(parsed_market)
+                    else:
+                        logger.debug(f"Market {idx+1} could not be parsed (missing data)")
+                except Exception as e:
+                    logger.warning(f"Error parsing closed market {idx+1}: {e}")
+                    continue
+            
+            # Sort by end_timestamp, most recent first
+            parsed_markets.sort(
+                key=lambda x: x.get('end_timestamp', pd.Timestamp.min),
+                reverse=True
+            )
+            
+            logger.info(f"Successfully parsed {len(parsed_markets)} closed markets from {len(markets)} raw results")
+            
+            # Log the timestamps of the first few for debugging
+            if parsed_markets:
+                first_end = parsed_markets[0].get('end_timestamp')
+                logger.debug(f"Most recent closed market ended at: {first_end}")
+            
+            return parsed_markets
+            
+        except requests.RequestException as e:
+            logger.error(f"Error fetching closed markets: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error in get_closed_markets: {e}", exc_info=True)
+            return []
+    
+    def _parse_closed_market(self, market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Parse a closed market to determine the winner and timing.
+        
+        Looks at outcomePrices to determine winner:
+        - ["1.0", "0.0"] or ["1", "0"] means YES won
+        - ["0.0", "1.0"] or ["0", "1"] means NO won
+        
+        Args:
+            market: Market data dictionary from Gamma API
+            
+        Returns:
+            Parsed market with outcome, timestamp, and metadata
+        """
+        try:
+            market_id = market.get('id', market.get('market_id', 'unknown'))
+            
+            # Try multiple ways to determine outcome
+            outcome = None
+            
+            # Method 1: Check outcomePrices field
+            # For BTC markets: index 0 = "Up" (YES), index 1 = "Down" (NO)
+            outcome_prices = market.get('outcomePrices') or market.get('outcome_prices')
+            outcomes_labels = market.get('outcomes', [])
+            
+            # IMPORTANT: Parse JSON strings if the API returns them as strings
+            if isinstance(outcome_prices, str):
+                try:
+                    outcome_prices = json.loads(outcome_prices)
+                except (json.JSONDecodeError, TypeError):
+                    outcome_prices = None
+            
+            if isinstance(outcomes_labels, str):
+                try:
+                    outcomes_labels = json.loads(outcomes_labels)
+                except (json.JSONDecodeError, TypeError):
+                    outcomes_labels = []
+            
+            logger.debug(f"Market {market_id}: outcomePrices={outcome_prices}, outcomes={outcomes_labels}")
+            
+            if outcome_prices and isinstance(outcome_prices, list) and len(outcome_prices) >= 2:
+                try:
+                    # Handle both string and numeric values
+                    first_price_str = str(outcome_prices[0]).strip()
+                    second_price_str = str(outcome_prices[1]).strip()
+                    
+                    first_price = float(first_price_str)
+                    second_price = float(second_price_str)
+                    
+                    logger.debug(f"Market {market_id}: first_price={first_price}, second_price={second_price}")
+                    
+                    # If both are 0 or very small, market might not be resolved yet
+                    if first_price < 0.01 and second_price < 0.01:
+                        logger.debug(f"Market {market_id} has unresolved outcomePrices: {outcome_prices}")
+                        return None
+                    
+                    # Determine which outcome labels we have
+                    # BTC markets use "Up"/"Down", others might use "Yes"/"No"
+                    first_label = str(outcomes_labels[0]).upper() if outcomes_labels and len(outcomes_labels) > 0 else 'YES'
+                    second_label = str(outcomes_labels[1]).upper() if outcomes_labels and len(outcomes_labels) > 1 else 'NO'
+                    
+                    logger.debug(f"Market {market_id}: first_label={first_label}, second_label={second_label}")
+                    
+                    # Map to YES/NO based on the label semantics
+                    # "Up" = YES (BTC >= Strike), "Down" = NO (BTC < Strike)
+                    # "Yes" = YES, "No" = NO
+                    first_is_yes = first_label in ('YES', 'UP')
+                    second_is_yes = second_label in ('YES', 'UP')
+                    
+                    # Check which outcome won (price = 1 or very close to 1)
+                    # The winning outcome has price close to 1, losing has price close to 0
+                    if first_price >= 0.5:
+                        # First outcome won
+                        outcome = 'YES' if first_is_yes else 'NO'
+                        logger.debug(f"Market {market_id}: first outcome won, outcome={outcome}")
+                    elif second_price >= 0.5:
+                        # Second outcome won  
+                        outcome = 'YES' if second_is_yes else 'NO'
+                        logger.debug(f"Market {market_id}: second outcome won, outcome={outcome}")
+                    else:
+                        logger.debug(f"Market {market_id}: neither price >= 0.5, first={first_price}, second={second_price}")
+                        
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"Error parsing outcomePrices {outcome_prices}: {e}")
+                    pass
+            
+            # Method 2: Check resolution field
+            if not outcome:
+                resolution = market.get('resolution') or market.get('winner')
+                if resolution:
+                    resolution_upper = str(resolution).upper()
+                    if resolution_upper in ('YES', 'NO'):
+                        outcome = resolution_upper
+            
+            # Method 3: Check outcomes array for winner
+            if not outcome:
+                outcomes = market.get('outcomes', [])
+                if isinstance(outcomes, list):
+                    for outcome_obj in outcomes:
+                        if isinstance(outcome_obj, dict):
+                            # Check if this outcome won (price = 1.0 or winner = true)
+                            outcome_price = outcome_obj.get('price')
+                            if (outcome_price == 1.0 or 
+                                outcome_price == "1" or 
+                                outcome_price == "1.0" or
+                                (isinstance(outcome_price, (int, float)) and outcome_price >= 0.99) or
+                                outcome_obj.get('winner') is True):
+                                outcome_title = str(outcome_obj.get('title', '')).upper()
+                                # Map Yes/Up to YES, No/Down to NO
+                                if outcome_title in ('YES', 'UP'):
+                                    outcome = 'YES'
+                                elif outcome_title in ('NO', 'DOWN'):
+                                    outcome = 'NO'
+                                break
+                        elif isinstance(outcome_obj, str):
+                            # Simple string outcomes - check if we can determine from context
+                            # This is less reliable, but might work for some markets
+                            pass
+            
+            if not outcome:
+                logger.warning(
+                    f"Market {market_id} has unclear outcome. "
+                    f"outcomePrices: {market.get('outcomePrices')}, "
+                    f"resolution: {market.get('resolution')}, "
+                    f"outcomes: {market.get('outcomes')}"
+                )
+                return None
+            
+            logger.debug(f"Market {market_id}: determined outcome = {outcome}")
+            
+            # Extract timing information
+            # Try multiple field names for end date
+            end_date_str = (
+                market.get('endDate') or 
+                market.get('end_date') or
+                market.get('endDateIso') or
+                market.get('endTime') or
+                market.get('end_time')
+            )
+            
+            # If market is nested in event, try event's endDate
+            if not end_date_str and isinstance(market, dict):
+                # Check if parent event has endDate
+                parent_event = market.get('event') or market.get('_event')
+                if parent_event and isinstance(parent_event, dict):
+                    end_date_str = (
+                        parent_event.get('endDate') or 
+                        parent_event.get('end_date') or
+                        parent_event.get('endDateIso')
+                    )
+            
+            if not end_date_str:
+                logger.debug(f"No endDate found for market {market_id}")
+                return None
+            
+            # Parse end date
+            end_date = pd.Timestamp(end_date_str)
+            if end_date.tz is None:
+                end_date = end_date.tz_localize('UTC')
+            
+            # Extract other useful information
+            result = {
+                'outcome': outcome,
+                'end_date': end_date_str,
+                'end_timestamp': end_date,
+                'market_id': market.get('id'),
+                'question': market.get('question', ''),
+                'outcome_prices': outcome_prices,
+                'resolved': market.get('resolved', True),
+            }
+            
+            # Try to extract resolution price if available
+            if 'resolutionPrice' in market:
+                result['resolution_price'] = market.get('resolutionPrice')
+            
+            # Try to extract strike if available
+            if 'groupItemThreshold' in market:
+                result['strike'] = market.get('groupItemThreshold')
+            
+            return result
+            
+        except (ValueError, TypeError, KeyError) as e:
+            logger.debug(f"Error parsing closed market: {e}")
             return None
 
