@@ -38,21 +38,78 @@ html, body, #root {
 
 /* Animation for price updates */
 @keyframes flash-green {
-  0%, 100% { background-color: transparent; }
-  50% { background-color: rgba(6, 249, 87, 0.2); }
+  0%, 100% { 
+    background-color: transparent;
+    color: inherit;
+  }
+  50% { 
+    background-color: rgba(6, 249, 87, 0.3);
+    color: #06f957;
+  }
 }
 
 @keyframes flash-red {
-  0%, 100% { background-color: transparent; }
-  50% { background-color: rgba(255, 59, 48, 0.2); }
+  0%, 100% { 
+    background-color: transparent;
+    color: inherit;
+  }
+  50% { 
+    background-color: rgba(255, 59, 48, 0.3);
+    color: #ff3b30;
+  }
+}
+
+@keyframes flash-green-continuous {
+  0%, 100% { 
+    opacity: 1;
+    color: #06f957;
+  }
+  50% { 
+    opacity: 0.5;
+    color: #04c243;
+  }
+}
+
+@keyframes flash-red-continuous {
+  0%, 100% { 
+    opacity: 1;
+    color: #ff3b30;
+  }
+  50% { 
+    opacity: 0.5;
+    color: #cc2e24;
+  }
 }
 
 .flash-green {
-  animation: flash-green 0.3s ease-out;
+  animation: flash-green 0.5s ease-out;
 }
 
 .flash-red {
-  animation: flash-red 0.3s ease-out;
+  animation: flash-red 0.5s ease-out;
+}
+
+.flash-green-continuous {
+  animation: flash-green-continuous 1s ease-in-out infinite;
+}
+
+.flash-red-continuous {
+  animation: flash-red-continuous 1s ease-in-out infinite;
+}
+
+@keyframes flash-block-green {
+  0%, 100% { 
+    background-color: #0d1f14;
+    border-color: rgba(255, 255, 255, 0.05);
+  }
+  50% { 
+    background-color: rgba(6, 249, 87, 0.15);
+    border-color: rgba(6, 249, 87, 0.4);
+  }
+}
+
+.flash-block-green {
+  animation: flash-block-green 1.5s ease-in-out infinite;
 }
 
 /* Tabular numbers for consistent digit width */

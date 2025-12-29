@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useEffect, useState } from 'react';
 import StatCard from './components/StatCard';
 import OrderDepth from './components/OrderDepth';
 import ExecutionControls from './components/ExecutionControls';
@@ -12,6 +12,20 @@ const AppContent: React.FC = () => {
     onError: toast.error,
     onSuccess: toast.success,
   });
+
+  // Track BTC price direction for flashing arrow
+  const prevBtcPriceRef = useRef<number | null>(null);
+  const [btcPriceDirection, setBtcPriceDirection] = useState<'up' | 'down' | null>(null);
+  const [btcPriceFlashKey, setBtcPriceFlashKey] = useState(0);
+
+  useEffect(() => {
+    if (prevBtcPriceRef.current !== null && fb.btcPrice !== prevBtcPriceRef.current) {
+      const direction = fb.btcPrice > prevBtcPriceRef.current ? 'up' : 'down';
+      setBtcPriceDirection(direction);
+      setBtcPriceFlashKey(prev => prev + 1);
+    }
+    prevBtcPriceRef.current = fb.btcPrice;
+  }, [fb.btcPrice]);
 
   // Generate SVG path for the BTC price chart
   const { chartPath, fillPath, currentPrice, minPrice, maxPrice } = useMemo(() => {
@@ -53,6 +67,25 @@ const AppContent: React.FC = () => {
     if (!strikeValue || !fb.btcPrice) return null;
     return fb.btcPrice - strikeValue;
   }, [fb.btcPrice, strikeValue]);
+
+  // Calculate Z-score color gradient
+  const zScoreColor = useMemo(() => {
+    if (fb.analytics?.zScore == null) return 'text-white';
+    const zScore = fb.analytics.zScore;
+    const absZ = Math.abs(zScore);
+    // Clamp to 0-3 range for intensity
+    const intensity = Math.min(absZ / 3, 1);
+    
+    if (zScore > 0) {
+      // Green gradient: brighter as it moves away from zero
+      const opacity = 0.5 + (intensity * 0.5); // 0.5 to 1.0
+      return { color: `rgba(6, 249, 87, ${opacity})`, textClass: 'text-primary' };
+    } else {
+      // Red gradient: brighter as it moves away from zero
+      const opacity = 0.5 + (intensity * 0.5); // 0.5 to 1.0
+      return { color: `rgba(255, 59, 48, ${opacity})`, textClass: 'text-accent-red' };
+    }
+  }, [fb.analytics?.zScore]);
 
   // Format prior outcomes as arrows
   const priorOutcomesDisplay = useMemo(() => {
@@ -153,6 +186,8 @@ const AppContent: React.FC = () => {
               subValueColor={btcDelta !== null && btcDelta >= 0 ? 'text-primary' : 'text-accent-red'}
               trend={btcDelta !== null && btcDelta >= 0 ? 'up' : 'down'}
               icon="show_chart"
+              priceDirection={btcPriceDirection}
+              flashKey={btcPriceFlashKey}
             />
             <div className="bg-surface-dark border border-white/5 p-4 rounded-lg">
               <p className="text-gray-400 text-xs font-medium uppercase tracking-wider mb-1">Strike Price</p>
@@ -161,7 +196,7 @@ const AppContent: React.FC = () => {
               </p>
               <div className="w-full bg-white/10 h-1 mt-2 rounded-full overflow-hidden">
                 <div 
-                  className={`h-full ${fb.yesPrice > 50 ? 'bg-primary' : 'bg-accent-red'}`} 
+                  className="h-full bg-blue-500" 
                   style={{ width: `${fb.yesPrice}%` }}
                 ></div>
               </div>
@@ -171,8 +206,9 @@ const AppContent: React.FC = () => {
               label="Basis Points (BPS)" 
               value={fb.analytics?.basisPoints != null ? fb.analytics?.basisPoints.toFixed(0) : '--'}
               subValue={fb.analytics?.basisPoints != null ? (fb.analytics?.basisPoints >= 0 ? '+' : '') + fb.analytics?.basisPoints.toFixed(0) : ''}
-              subValueColor={(fb.analytics?.basisPoints ?? 0) >= 0 ? 'text-primary' : 'text-accent-red font-bold bg-accent-red/10 px-1.5 py-0.5 rounded'}
-              trend="none"
+              subValueColor={(fb.analytics?.basisPoints ?? 0) >= 0 ? 'text-primary' : 'text-accent-red'}
+              trend={(fb.analytics?.basisPoints ?? 0) >= 0 ? 'up' : 'down'}
+              valueColor={(fb.analytics?.basisPoints ?? 0) >= 0 ? 'text-primary' : 'text-accent-red'}
             />
             <StatCard 
               label="Edge Detected" 
@@ -180,13 +216,27 @@ const AppContent: React.FC = () => {
               subValue={fb.analytics?.edgeYes === 'undervalued' ? 'BUY Signal' : fb.analytics?.edgeYes === 'overvalued' ? 'SELL Signal' : 'Fair Value'}
               subValueColor={fb.analytics?.edgeYes === 'undervalued' ? 'text-primary' : fb.analytics?.edgeYes === 'overvalued' ? 'text-accent-red' : 'text-gray-400'}
               highlight={fb.analytics?.edgeYes === 'undervalued'}
+              valueColor={fb.analytics?.edgeBpsYes != null && fb.analytics.edgeBpsYes >= 0 ? 'text-primary' : 'text-accent-red'}
+              trend={fb.analytics?.edgeBpsYes != null && fb.analytics.edgeBpsYes >= 0 ? 'up' : 'down'}
+              flashBlock={fb.analytics?.edgeYes === 'undervalued'}
             />
             <StatCard 
               label="Z-Score" 
               value={fb.analytics?.zScore?.toFixed(2) || '--'}
               subValue={fb.analytics?.sigmaLabel || 'No Signal'}
               subValueColor="text-gray-500"
+              valueColor={zScoreColor.textClass}
+              customValueStyle={{ color: zScoreColor.color }}
             />
+            {fb.analytics?.fairValueYes != null && (
+              <StatCard 
+                label="Fair Value" 
+                value={`${(fb.analytics.fairValueYes * 100).toFixed(1)}%`}
+                subValue={`Current: ${fb.yesPrice}%`}
+                subValueColor={fb.yesPrice > (fb.analytics.fairValueYes * 100) ? 'text-accent-red' : 'text-primary'}
+                valueColor={fb.yesPrice > (fb.analytics.fairValueYes * 100) ? 'text-accent-red' : 'text-primary'}
+              />
+            )}
           </div>
         </aside>
 
