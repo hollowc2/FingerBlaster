@@ -8,4 +8,7 @@ textual-plotext
 web3
 PyQt6
 matplotlib
+fastapi
+uvicorn[standard]
+pydantic
 
