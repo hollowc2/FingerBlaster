@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 from functools import wraps
 from typing import List, Optional, Any, Callable
@@ -30,6 +31,9 @@ from src.core import FingerBlasterCore
 from src.analytics import AnalyticsSnapshot, TimerUrgency, EdgeDirection
 
 logger = logging.getLogger("FingerBlaster.WebAPI")
+# Ensure our logger shows up
+logging.basicConfig(level=logging.INFO)
+logger.setLevel(logging.INFO)
 
 
 # =============================================================================
@@ -322,8 +326,22 @@ async def run_update_loop() -> None:
     if not core:
         return
     
+    print("[UPDATE LOOP] Starting...", flush=True)
+    
     # Start RTDS for real-time BTC prices
+    print("[UPDATE LOOP] Starting RTDS...", flush=True)
     await core.start_rtds()
+    print("[UPDATE LOOP] RTDS started", flush=True)
+    
+    # Immediately try to discover market on startup
+    print("[UPDATE LOOP] Initial market discovery...", flush=True)
+    try:
+        await core.update_market_status()
+        print("[UPDATE LOOP] Initial market discovery completed", flush=True)
+        logger.info("Initial market discovery completed")
+    except Exception as e:
+        print(f"[UPDATE LOOP] Initial market discovery failed: {e}", flush=True)
+        logger.warning(f"Initial market discovery failed: {e}")
     
     config = core.config
     
@@ -336,37 +354,63 @@ async def run_update_loop() -> None:
     
     while True:
         try:
-            now = asyncio.get_event_loop().time()
+            now = time.time()
             
-            # Market status (every 5s)
+            # Market status (every 5s) - with timeout protection
             if now - last_market_update >= config.market_status_interval:
-                await core.update_market_status()
+                try:
+                    await asyncio.wait_for(core.update_market_status(), timeout=12.0)
+                except asyncio.TimeoutError:
+                    logger.warning("update_market_status timed out")
+                except Exception as e:
+                    logger.error(f"Error in update_market_status: {e}", exc_info=True)
                 last_market_update = now
             
-            # BTC price (every 3s, fallback if RTDS active)
+            # BTC price (every 3s, fallback if RTDS active) - with timeout protection
             if now - last_btc_update >= config.btc_price_interval:
-                await core.update_btc_price()
+                try:
+                    await asyncio.wait_for(core.update_btc_price(), timeout=8.0)
+                except asyncio.TimeoutError:
+                    logger.warning("update_btc_price timed out")
+                except Exception as e:
+                    logger.error(f"Error in update_btc_price: {e}", exc_info=True)
                 last_btc_update = now
             
-            # Account stats (every 10s)
+            # Account stats (every 10s) - with timeout protection
             if now - last_stats_update >= config.account_stats_interval:
-                await core.update_account_stats()
+                try:
+                    await asyncio.wait_for(core.update_account_stats(), timeout=8.0)
+                except asyncio.TimeoutError:
+                    logger.warning("update_account_stats timed out")
+                except Exception as e:
+                    logger.error(f"Error in update_account_stats: {e}", exc_info=True)
                 last_stats_update = now
             
-            # Countdown (every 200ms)
+            # Countdown (every 200ms) - with timeout protection
             if now - last_countdown_update >= config.countdown_interval:
-                await core.update_countdown()
+                try:
+                    await asyncio.wait_for(core.update_countdown(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning("update_countdown timed out")
+                except Exception as e:
+                    logger.error(f"Error in update_countdown: {e}", exc_info=True)
                 last_countdown_update = now
             
-            # Analytics (every 500ms)
+            # Analytics (every 500ms) - with timeout protection
             if now - last_analytics_update >= config.analytics_interval:
-                await core.update_analytics()
+                try:
+                    await asyncio.wait_for(core.update_analytics(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    logger.warning("update_analytics timed out")
+                except Exception as e:
+                    logger.error(f"Error in update_analytics: {e}", exc_info=True)
                 last_analytics_update = now
             
             # Small sleep to prevent busy loop
             await asyncio.sleep(0.1)
             
         except asyncio.CancelledError:
+            print("[UPDATE LOOP] Cancelled, stopping...")
             logger.info("Update loop cancelled")
             break
         except Exception as e:
@@ -383,18 +427,28 @@ async def lifespan(app: FastAPI):
     """Application startup and shutdown lifecycle."""
     global core, background_task
     
+    print("[STARTUP] Starting FingerBlaster Web API...")
     logger.info("Starting FingerBlaster Web API...")
     
     # Log API key status
     if API_KEY:
+        print("[STARTUP] API key authentication ENABLED")
         logger.info("API key authentication ENABLED (via FB_API_KEY env)")
     else:
+        print("[STARTUP] API key authentication DISABLED (dev mode)")
         logger.info(f"API key authentication DISABLED (dev mode)")
     
     # Initialize core
-    core = FingerBlasterCore()
+    print("[STARTUP] Initializing FingerBlasterCore...")
+    try:
+        core = FingerBlasterCore()
+        print("[STARTUP] FingerBlasterCore initialized successfully")
+    except Exception as e:
+        print(f"[STARTUP ERROR] Failed to initialize core: {e}")
+        raise
     
     # Register callbacks for broadcasting to WebSocket clients
+    print("[STARTUP] Registering callbacks...")
     core.register_callback('market_update', on_market_update)
     core.register_callback('btc_price_update', on_btc_price_update)
     core.register_callback('price_update', on_price_update)
@@ -407,24 +461,42 @@ async def lifespan(app: FastAPI):
     core.register_callback('analytics_update', on_analytics_update)
     
     # Start background update loop
+    print("[STARTUP] Starting background update loop...")
     background_task = asyncio.create_task(run_update_loop())
     
+    # Log registered routes for debugging
+    routes = [f"{route.methods if hasattr(route, 'methods') else 'WS'} {route.path}" 
+              for route in app.routes]
+    print(f"[STARTUP] Registered routes: {', '.join(sorted(routes))}")
+    logger.info(f"Registered routes: {', '.join(sorted(routes))}")
+    
+    print("[STARTUP] FingerBlaster Web API started successfully!")
     logger.info("FingerBlaster Web API started successfully")
     
     yield
     
     # Shutdown
+    print("[SHUTDOWN] Shutting down FingerBlaster Web API...")
     logger.info("Shutting down FingerBlaster Web API...")
     
     if background_task:
+        print("[SHUTDOWN] Cancelling background task...")
         background_task.cancel()
         try:
-            await background_task
+            await asyncio.wait_for(background_task, timeout=3.0)
+        except asyncio.TimeoutError:
+            print("[SHUTDOWN] Background task timeout, forcing cancel")
         except asyncio.CancelledError:
             pass
+        print("[SHUTDOWN] Background task stopped")
     
     if core:
-        await core.shutdown()
+        print("[SHUTDOWN] Shutting down core...")
+        try:
+            await asyncio.wait_for(core.shutdown(), timeout=10.0)
+        except asyncio.TimeoutError:
+            print("[SHUTDOWN] Core shutdown timeout!")
+        print("[SHUTDOWN] Core shutdown complete")
     
     logger.info("FingerBlaster Web API shutdown complete")
 
@@ -455,6 +527,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add request logging middleware for debugging
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log all incoming requests for debugging."""
+    path = request.url.path
+    method = request.method
+    print(f"[REQUEST] {method} {path}", flush=True)
+    
+    response = await call_next(request)
+    
+    print(f"[RESPONSE] {method} {path} -> {response.status_code}", flush=True)
+    
+    if response.status_code == 404:
+        print(f"[404 ERROR] {method} {path} -> 404 Not Found!", flush=True)
+        logger.warning(f"404 Not Found: {method} {path}")
+        # Log available routes for debugging
+        available_routes = [f"{r.methods if hasattr(r, 'methods') else 'WS'} {r.path}" 
+                           for r in app.routes if hasattr(r, 'path')]
+        print(f"[404 ERROR] Available routes: {', '.join(sorted(available_routes))}", flush=True)
+        logger.warning(f"Available routes: {', '.join(sorted(available_routes))}")
+    
+    return response
 
 
 # =============================================================================
@@ -554,13 +649,47 @@ async def adjust_size(
     return {"status": "ok", "size": core.selected_size}
 
 
-@app.get("/api/state")
-@limiter.limit("30/minute")
-async def get_full_state(
+@app.post("/api/discover-market", response_model=StatusResponse)
+@limiter.limit("10/minute")
+async def discover_market(
     request: Request,
     _auth: bool = Depends(verify_api_key),
 ):
-    """Get the full current state (for initial sync on connect)."""
+    """Manually trigger market discovery."""
+    print("[API] /api/discover-market endpoint called!")
+    logger.info("Discover market endpoint called")
+    
+    if not core:
+        print("[API ERROR] Core not initialized!")
+        logger.error("Core not initialized when discover_market was called")
+        raise HTTPException(status_code=503, detail="Core not initialized")
+    
+    try:
+        print("[API] Starting market discovery...")
+        logger.info("Starting market discovery...")
+        await core.update_market_status()
+        
+        # Check if market was found
+        market = await core.market_manager.get_market()
+        if market:
+            print(f"[API] Market discovery successful: market_id={market.get('market_id', 'unknown')}")
+            logger.info(f"Market discovery successful: market_id={market.get('market_id', 'unknown')}")
+        else:
+            print("[API] Market discovery completed but no market was found")
+            logger.warning("Market discovery completed but no market was found")
+        
+        return StatusResponse(status="market discovery triggered")
+    except Exception as e:
+        print(f"[API ERROR] Market discovery error: {e}")
+        logger.error(f"Market discovery error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Market discovery failed: {str(e)}")
+
+
+async def _gather_full_state() -> dict:
+    """Helper function to gather the full current state.
+    
+    This can be called from both the REST endpoint and WebSocket handler.
+    """
     if not core:
         raise HTTPException(status_code=503, detail="Core not initialized")
     
@@ -571,19 +700,42 @@ async def get_full_state(
     btc_history = await core.history_manager.get_btc_history()
     yes_history = await core.history_manager.get_yes_history()
     
-    # Get account balances
+    # Extract strike price - check multiple possible keys
+    strike_value = None
+    if market:
+        # Try different possible keys for strike price
+        strike_value = market.get('strike_price') or market.get('strike') or None
+        if strike_value:
+            strike_value = str(strike_value).strip()
+            if strike_value in ('N/A', 'None', '', 'Dynamic', 'Pending'):
+                strike_value = None
+        if not strike_value:
+            logger.debug(f"Market exists but no strike_price found. Market keys: {list(market.keys())}")
+    
+    # Get account balances (use asyncio.to_thread with timeout to avoid blocking)
     balance = 0.0
     yes_bal = 0.0
     no_bal = 0.0
     try:
-        balance = core.connector.get_usdc_balance()
+        balance = await asyncio.wait_for(
+            asyncio.to_thread(core.connector.get_usdc_balance),
+            timeout=3.0
+        )
         if token_map:
             y_id = token_map.get('YES')
             n_id = token_map.get('NO')
             if y_id:
-                yes_bal = core.connector.get_token_balance(y_id)
+                yes_bal = await asyncio.wait_for(
+                    asyncio.to_thread(core.connector.get_token_balance, y_id),
+                    timeout=3.0
+                )
             if n_id:
-                no_bal = core.connector.get_token_balance(n_id)
+                no_bal = await asyncio.wait_for(
+                    asyncio.to_thread(core.connector.get_token_balance, n_id),
+                    timeout=3.0
+                )
+    except asyncio.TimeoutError:
+        logger.warning("Balance fetch timeout, using cached values")
     except Exception as e:
         logger.debug(f"Error fetching balances: {e}")
     
@@ -594,7 +746,7 @@ async def get_full_state(
     state = {
         "market": {
             "active": market is not None,
-            "strike": str(market.get('strike_price', 'N/A')) if market else None,
+            "strike": strike_value if strike_value else (None if market else None),
             "endDate": market.get('end_date') if market else None,
         },
         "prices": {
@@ -620,6 +772,16 @@ async def get_full_state(
     return state
 
 
+@app.get("/api/state")
+@limiter.limit("30/minute")
+async def get_full_state(
+    request: Request,
+    _auth: bool = Depends(verify_api_key),
+):
+    """Get the full current state (for initial sync on connect)."""
+    return await _gather_full_state()
+
+
 # =============================================================================
 # WebSocket Endpoint
 # =============================================================================
@@ -630,16 +792,48 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     
     try:
-        # Send initial state on connect
+        # Send initial state on connect - don't let failures close the connection
         if core:
             try:
-                state = await get_full_state()
+                # Add timeout to prevent blocking on WebSocket connect
+                state = await asyncio.wait_for(_gather_full_state(), timeout=5.0)
                 await websocket.send_text(json.dumps({
                     "event": "initial_state",
                     "data": state,
                 }))
+                logger.debug("Initial state sent successfully")
+            except asyncio.TimeoutError:
+                logger.warning("Initial state gathering timed out, sending minimal state")
+                # Send minimal state if gathering times out
+                try:
+                    await websocket.send_text(json.dumps({
+                        "event": "initial_state",
+                        "data": {
+                            "market": {"active": False},
+                            "prices": {"yesPrice": 0.5, "noPrice": 0.5},
+                            "account": {"balance": 0.0, "yesBalance": 0.0, "noBalance": 0.0, "selectedSize": 0.0},
+                            "btcPrice": 0.0,
+                            "priorOutcomes": [],
+                        },
+                    }))
+                except Exception as send_error:
+                    logger.error(f"Failed to send minimal state: {send_error}")
             except Exception as e:
-                logger.debug(f"Error sending initial state: {e}")
+                logger.error(f"Error gathering initial state: {e}", exc_info=True)
+                # Try to send minimal state even on error
+                try:
+                    await websocket.send_text(json.dumps({
+                        "event": "initial_state",
+                        "data": {
+                            "market": {"active": False},
+                            "prices": {"yesPrice": 0.5, "noPrice": 0.5},
+                            "account": {"balance": 0.0, "yesBalance": 0.0, "noBalance": 0.0, "selectedSize": 0.0},
+                            "btcPrice": 0.0,
+                            "priorOutcomes": [],
+                        },
+                    }))
+                except Exception as send_error:
+                    logger.error(f"Failed to send fallback state: {send_error}")
         
         # Keep connection alive and handle client messages
         while True:
@@ -647,24 +841,36 @@ async def websocket_endpoint(websocket: WebSocket):
                 data = await websocket.receive_text()
                 
                 # Handle ping/pong
-                msg = json.loads(data)
-                if msg.get("type") == "ping":
-                    await websocket.send_text(json.dumps({"event": "pong"}))
-                elif msg.get("type") == "sync_request":
-                    # Client requests full state sync
-                    if core:
-                        state = await get_full_state()
-                        await websocket.send_text(json.dumps({
-                            "event": "initial_state",
-                            "data": state,
-                        }))
+                try:
+                    msg = json.loads(data)
+                    if msg.get("type") == "ping":
+                        await websocket.send_text(json.dumps({"event": "pong"}))
+                    elif msg.get("type") == "sync_request":
+                        # Client requests full state sync
+                        if core:
+                            try:
+                                state = await asyncio.wait_for(_gather_full_state(), timeout=5.0)
+                                await websocket.send_text(json.dumps({
+                                    "event": "initial_state",
+                                    "data": state,
+                                }))
+                            except asyncio.TimeoutError:
+                                logger.warning("State sync request timed out")
+                            except Exception as e:
+                                logger.error(f"Error in sync_request: {e}", exc_info=True)
+                except json.JSONDecodeError:
+                    logger.debug(f"Invalid JSON received: {data[:100]}")
+                    continue
             except WebSocketDisconnect:
+                logger.info("WebSocket client disconnected normally")
                 break
-            except json.JSONDecodeError:
-                continue
             except Exception as e:
-                logger.debug(f"WebSocket message error: {e}")
-                continue
+                # Log but don't break the connection on message errors
+                logger.error(f"WebSocket message error: {e}", exc_info=True)
+                # Continue the loop to keep connection alive
+                await asyncio.sleep(0.1)
+    except Exception as e:
+        logger.error(f"WebSocket endpoint error: {e}", exc_info=True)
     finally:
         await manager.disconnect(websocket)
 
