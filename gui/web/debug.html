@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Debug Test</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-green-900 text-white p-8">
+  <h1 class="text-4xl font-bold mb-4">Debug Test Page</h1>
+  <div id="test-output"></div>
+  <script>
+    const output = document.getElementById('test-output');
+    
+    // Test 1: Tailwind
+    const testDiv = document.createElement('div');
+    testDiv.className = 'bg-blue-500 p-4 rounded mt-4';
+    testDiv.textContent = 'If this box is blue, Tailwind is working!';
+    output.appendChild(testDiv);
+    
+    // Test 2: Check if React root exists
+    setTimeout(() => {
+      const root = document.getElementById('root');
+      const rootTest = document.createElement('div');
+      rootTest.className = 'mt-4 p-4 rounded ' + (root ? 'bg-green-500' : 'bg-red-500');
+      rootTest.textContent = root ? '✓ Root element exists' : '✗ Root element NOT found!';
+      output.appendChild(rootTest);
+      
+      // Test 3: Check for React
+      if (window.React) {
+        const reactTest = document.createElement('div');
+        reactTest.className = 'mt-4 p-4 rounded bg-green-500';
+        reactTest.textContent = '✓ React is loaded';
+        output.appendChild(reactTest);
+      } else {
+        const reactTest = document.createElement('div');
+        reactTest.className = 'mt-4 p-4 rounded bg-yellow-500';
+        reactTest.textContent = '⚠ React not in window (might be module)';
+        output.appendChild(reactTest);
+      }
+      
+      // Test 4: Console errors
+      const errorTest = document.createElement('div');
+      errorTest.className = 'mt-4 p-4 rounded bg-yellow-500';
+      errorTest.innerHTML = 'Check browser console (F12) for errors';
+      output.appendChild(errorTest);
+    }, 100);
+  </script>
+</body>
+</html>
+
