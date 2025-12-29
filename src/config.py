@@ -141,7 +141,7 @@ Screen {
     width: 35%;
     height: 100%;
     margin: 0 1;
-    border: double white;
+    border: solid white;
 }
 
 #left_cockpit.no_graphs {
@@ -253,7 +253,9 @@ PlotextPlot {
 ProbabilityChart {
     height: 1fr;
     width: 100%;
-    color: #00ff00;
+    color: #ffffff;
+    background: #1a1a1a;
+    border: solid white;
 }
 
 #price_history_container {
