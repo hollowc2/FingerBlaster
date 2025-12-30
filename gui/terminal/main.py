@@ -28,7 +28,7 @@ def run_textual_app():
     
     from src.config import AppConfig, CSS as CSS_STYLES
     from src.core import FingerBlasterCore
-    from gui.terminal.ui import MarketPanel, PricePanel, StatsPanel, ChartsPanel, ResolutionOverlay, ProbabilityChart
+    from src.ui import MarketPanel, PricePanel, StatsPanel, ChartsPanel, ResolutionOverlay, ProbabilityChart
     from src.utils import handle_ui_errors
     from src.analytics import AnalyticsSnapshot, TimerUrgency
     
