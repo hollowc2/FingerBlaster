@@ -739,7 +739,7 @@ class RTDSManager:
         on_btc_price: Callable[[float], Union[None, Awaitable[None]]]
     ):
         """Initialize RTDS manager.
-        
+
         Args:
             config: Application configuration
             on_btc_price: Callback function for BTC price updates
@@ -755,6 +755,8 @@ class RTDSManager:
         # Format: {timestamp_ms: price}
         self.chainlink_price_history: Dict[int, float] = {}
         self._history_lock = asyncio.Lock()
+        # Message counter for rate-limited logging
+        self._message_count = 0
     
     async def start(self) -> None:
         """Start RTDS WebSocket connection."""
@@ -929,13 +931,14 @@ class RTDSManager:
         try:
             topic = data.get('topic')
             payload = data.get('payload', {})
-            
-            # Log messages at DEBUG level to reduce log file size
-            # Only log if we have actual data (not empty messages)
-            if topic or payload:
-                logger.debug(f"RTDS message received: topic={topic}, symbol={payload.get('symbol', 'N/A')}")
-            else:
-                logger.debug(f"RTDS empty message received (likely subscription confirmation)")
+
+            # Rate-limited logging: only log every 100th message to reduce log bloat
+            self._message_count += 1
+            if self._message_count % 100 == 0:
+                if topic or payload:
+                    logger.debug(f"RTDS message #{self._message_count}: topic={topic}, symbol={payload.get('symbol', 'N/A')}")
+                else:
+                    logger.debug(f"RTDS message #{self._message_count}: empty (subscription confirmation)")
             
             btc_price = None
             

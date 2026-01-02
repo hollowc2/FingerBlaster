@@ -2,7 +2,6 @@
 
 Supports multiple UI interfaces:
 - Terminal UI (Textual): --terminal or default
-- Dashboard UI (Textual): --dashboard
 - Desktop UI (PyQt6): --desktop or --pyqt
 - Web UI: --web
 """
@@ -25,17 +24,7 @@ logger = logging.getLogger("FingerBlaster")
 
 def main():
     """Main entry point - routes to appropriate UI based on command line arguments."""
-    if "--dashboard" in sys.argv:
-        # Import and run Dashboard UI
-        try:
-            from gui.textual_dashboard.dashboard import Dashboard
-            Dashboard().run()
-        except ImportError as e:
-            logger.error(f"Dashboard UI not available: {e}")
-            logger.error("Install Textual to use dashboard UI.")
-            print("ERROR: Dashboard UI not available. Install Textual to use dashboard UI.")
-            sys.exit(1)
-    elif "--desktop" in sys.argv or "--pyqt" in sys.argv:
+    if "--desktop" in sys.argv or "--pyqt" in sys.argv:
         # Import and run PyQt6 UI
         try:
             from gui.desktop.main import run_pyqt_app

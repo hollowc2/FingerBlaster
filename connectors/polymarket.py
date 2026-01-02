@@ -161,13 +161,29 @@ class PolymarketConnector(DataConnector):
     def _initialize_client(self) -> None:
         """
         Initialize the ClobClient with proper authentication.
-        
+
         Separated from __init__ to follow SRP and improve testability.
         """
         key = os.getenv("PRIVATE_KEY")
-        
+
         if not key:
             logger.info("No private key found, initializing public client")
+            self.client = ClobClient(NetworkConstants.CLOB_HOST)
+            self.signature_type = SignatureType.EOA
+            return
+
+        # Validate private key format
+        key = key.strip()
+        if not key.startswith("0x"):
+            logger.error("Invalid PRIVATE_KEY format - must start with '0x'")
+            logger.warning("Initializing public client due to invalid private key")
+            self.client = ClobClient(NetworkConstants.CLOB_HOST)
+            self.signature_type = SignatureType.EOA
+            return
+
+        if len(key) != 66:  # 0x + 64 hex characters
+            logger.error(f"Invalid PRIVATE_KEY length - expected 66 characters, got {len(key)}")
+            logger.warning("Initializing public client due to invalid private key")
             self.client = ClobClient(NetworkConstants.CLOB_HOST)
             self.signature_type = SignatureType.EOA
             return
