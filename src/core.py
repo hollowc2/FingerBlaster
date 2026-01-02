@@ -1723,6 +1723,60 @@ class FingerBlasterCore:
         
         await self.update_account_stats()
     
+    async def close_position(self, side: str) -> None:
+        """Close a single position for one side (YES or NO).
+        
+        Args:
+            side: Side to close ('YES' or 'NO')
+        """
+        side = side.upper()
+        if side not in ('YES', 'NO'):
+            self.log_msg(f"Invalid side for close position: {side}")
+            return
+        
+        self.log_msg(f"Closing {side} position...")
+        
+        token_map = await self.market_manager.get_token_map()
+        if not token_map:
+            error_msg = "Error: Token map not ready."
+            self.log_msg(error_msg)
+            return
+        
+        token_id = token_map.get(side)
+        if not token_id:
+            error_msg = f"Error: Token ID not found for {side}"
+            self.log_msg(error_msg)
+            return
+        
+        try:
+            # Get current balance
+            balance = await asyncio.to_thread(
+                self.connector.get_token_balance, token_id
+            )
+            
+            if balance <= 0.1:  # MIN_BALANCE_THRESHOLD
+                self.log_msg(f"No {side} position to close (balance: {balance:.2f})")
+                return
+            
+            # Create SELL order to close position
+            resp = await asyncio.to_thread(
+                self.connector.create_market_order, token_id, balance, 'SELL'
+            )
+            
+            if resp and resp.get('orderID'):
+                order_id = resp.get('orderID', '')
+                self.log_msg(f"{side} position closed: {order_id[:10]}...")
+                # Reset position tracking for this side
+                self.position_tracker.reset(side)
+                await self.update_account_stats()
+            else:
+                error_msg = f"Failed to close {side} position"
+                self.log_msg(error_msg)
+        except Exception as e:
+            error_msg = f"Error closing {side} position: {e}"
+            self.log_msg(error_msg)
+            logger.error(error_msg, exc_info=True)
+    
     async def cancel_all(self) -> None:
         """Cancel all pending orders with improved error handling."""
         self.log_msg("Action: CANCEL ALL")

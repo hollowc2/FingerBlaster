@@ -29,6 +29,7 @@ from textual.reactive import reactive
 # Import backend core
 from src.core import FingerBlasterCore
 from src.analytics import AnalyticsSnapshot, EdgeDirection
+from gui.terminal.position_manager import PositionManagerApp
 
 # Configure logging
 logging.basicConfig(
@@ -163,12 +164,15 @@ class TradingTUI(App):
     core: Optional[FingerBlasterCore] = None
     _flash_timer: Optional[asyncio.Task] = None
     _flash_state: bool = False
+    _position_manager: Optional[PositionManagerApp] = None
+    _position_manager_open: bool = False
 
     BINDINGS = [
         ("y", "place_order('YES')", "Buy YES"),
         ("n", "place_order('NO')", "Buy NO"),
         ("f", "flatten", "Flatten All"),
         ("c", "cancel_orders", "Cancel All"),
+        ("p", "toggle_positions", "Positions"),
         ("q", "quit", "Quit")
     ]
 
@@ -625,6 +629,23 @@ class TradingTUI(App):
         if self.core:
             await self.core.cancel_all()
             self.notify("Orders Cancelled")
+    
+    async def action_toggle_positions(self) -> None:
+        """Toggle position manager window."""
+        if not self.core:
+            return
+        
+        # Check if position manager screen is currently active
+        if self.screen_stack and len(self.screen_stack) > 1:
+            # Position manager is open, close it
+            await self.pop_screen()
+            self._position_manager_open = False
+        else:
+            # Open position manager
+            if not self._position_manager:
+                self._position_manager = PositionManagerApp(self.core)
+            await self.push_screen(self._position_manager)
+            self._position_manager_open = True
 
     def _on_order_submitted(self, side: str, size: float, price: float) -> None: pass
     def _on_order_filled(self, side: str, size: float, price: float, order_id: str) -> None:
@@ -647,6 +668,9 @@ class TradingTUI(App):
 
     async def on_unmount(self) -> None:
         self._stop_flash_timer()
+        if self._position_manager:
+            self._position_manager.exit()
+            self._position_manager = None
         if self.core: await self.core.shutdown()
 
 
