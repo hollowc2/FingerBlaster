@@ -7,7 +7,7 @@ import os
 import sys
 import threading
 import time
-from typing import Optional
+from typing import Optional, List, Any
 
 # Set Qt platform plugin path before importing Qt
 # This helps with some Linux systems that have plugin loading issues
@@ -462,23 +462,23 @@ class FingerBlasterPyQtApp(QMainWindow):
         scrollbar.setValue(scrollbar.maximum())
     
     # Callback handlers - synchronous wrappers that emit signals for thread-safe UI updates
-    def _on_market_update_sync(self, strike: str, ends: str):
+    def _on_market_update_sync(self, strike: str, ends: str) -> None:
         """Handle market update from core."""
         self.signals.market_strike.emit(strike)
         self.signals.market_ends.emit(ends)
     
-    def _on_btc_price_update_sync(self, price: float):
+    def _on_btc_price_update_sync(self, price: float) -> None:
         """Handle BTC price update from core."""
         self.signals.btc_price.emit(price)
     
-    def _on_price_update_sync(self, yes_price: float, no_price: float, best_bid: float, best_ask: float):
+    def _on_price_update_sync(self, yes_price: float, no_price: float, best_bid: float, best_ask: float) -> None:
         """Handle price update from core."""
         # Use centralized spread calculation from core
         yes_spread, no_spread = self.core.calculate_spreads(best_bid, best_ask)
         self.signals.prices.emit(yes_price, no_price, yes_spread, no_spread)
     
-    def _on_account_stats_update_sync(self, balance: float, yes_balance: float, no_balance: float, size: float, 
-                                      avg_entry_price_yes: Optional[float] = None, avg_entry_price_no: Optional[float] = None):
+    def _on_account_stats_update_sync(self, balance: float, yes_balance: float, no_balance: float, size: float,
+                                      avg_entry_price_yes: Optional[float] = None, avg_entry_price_no: Optional[float] = None) -> None:
         """Handle account stats update from core."""
         # Always use the current selected_size from core to ensure accuracy
         current_size = self.core.selected_size
@@ -487,17 +487,17 @@ class FingerBlasterPyQtApp(QMainWindow):
         avg_no = avg_entry_price_no if avg_entry_price_no is not None else 0.0
         self.signals.account_stats.emit(balance, yes_balance, no_balance, current_size, avg_yes, avg_no)
     
-    def _on_countdown_update_sync(self, time_str: str, urgency=None, seconds_remaining: int = 0):
+    def _on_countdown_update_sync(self, time_str: str, urgency: Optional[TimerUrgency] = None, seconds_remaining: int = 0) -> None:
         """Handle countdown update from core with urgency."""
         self.signals.countdown.emit(time_str, urgency, seconds_remaining)
     
-    def _on_analytics_update_sync(self, snapshot: AnalyticsSnapshot):
+    def _on_analytics_update_sync(self, snapshot: AnalyticsSnapshot) -> None:
         """Handle analytics update from core."""
         self.signals.analytics_update.emit(snapshot)
     
-    def _on_prior_outcomes_update_sync(self, outcomes: list):
+    def _on_prior_outcomes_update_sync(self, outcomes: List[str]) -> None:
         """Handle prior outcomes update from core.
-        
+
         Displays arrows left-to-right as oldest-to-newest (like a timeline).
         The rightmost arrow is the most recent outcome.
         """
@@ -512,7 +512,7 @@ class FingerBlasterPyQtApp(QMainWindow):
             outcome_str = "---"
         self.signals.prior_outcomes.emit(outcome_str)
     
-    def _on_resolution_sync(self, resolution: Optional[str]):
+    def _on_resolution_sync(self, resolution: Optional[str]) -> None:
         """Handle resolution from core."""
         if resolution:
             self.signals.resolution_show.emit(resolution)
@@ -525,11 +525,11 @@ class FingerBlasterPyQtApp(QMainWindow):
         if self.resolution_overlay.isVisible():
             self.resolution_overlay.setGeometry(0, 0, self.width(), self.height())
     
-    def _on_log(self, message: str):
+    def _on_log(self, message: str) -> None:
         """Handle log message from core."""
         self.signals.log_message.emit(message)
     
-    def _on_chart_update_sync(self, *args):
+    def _on_chart_update_sync(self, *args: Any) -> None:
         """Handle chart update from core."""
         if not self.graphs_visible:
             return

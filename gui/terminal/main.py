@@ -3,7 +3,7 @@ import os
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable, Any
 
 # Add project root to Python path
 try:
@@ -28,7 +28,7 @@ from textual.reactive import reactive
 
 # Import backend core
 from src.core import FingerBlasterCore
-from src.analytics import AnalyticsSnapshot, EdgeDirection
+from src.analytics import AnalyticsSnapshot, EdgeDirection, TimerUrgency
 from gui.terminal.position_manager import PositionManagerApp
 
 # Configure logging
@@ -284,8 +284,8 @@ class TradingTUI(App):
         
         yield Footer()
 
-    def _async_callback_wrapper(self, callback):
-        async def wrapper(*args, **kwargs):
+    def _async_callback_wrapper(self, callback: Callable) -> Callable:
+        async def wrapper(*args: Any, **kwargs: Any) -> None:
             try:
                 callback(*args, **kwargs)
             except Exception as e:
@@ -502,7 +502,7 @@ class TradingTUI(App):
             self._flash_timer = None
             self._flash_state = False
 
-    def _on_countdown_update(self, time_str: str, urgency, seconds_remaining: int) -> None:
+    def _on_countdown_update(self, time_str: str, urgency: Optional[TimerUrgency], seconds_remaining: int) -> None:
         try:
             time_widget = self.query_one("#metric-time", MetricBox)
             time_widget.query_one(".metric-value", Static).update(time_str)
@@ -660,7 +660,7 @@ class TradingTUI(App):
     def _on_resolution(self, resolution: Optional[str]) -> None:
         if resolution: self.notify(f"RESOLVED: {resolution}", timeout=10)
 
-    def _on_price_update(self, yes_price, no_price, bid, ask):
+    def _on_price_update(self, yes_price: float, no_price: float, bid: float, ask: float) -> None:
         self.yes_price = yes_price
         self.no_price = no_price
         self.best_bid = bid

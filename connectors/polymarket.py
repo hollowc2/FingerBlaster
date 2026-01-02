@@ -30,6 +30,7 @@ from py_clob_client.clob_types import (
 from py_clob_client.order_builder.constants import BUY, SELL
 
 from connectors.base import DataConnector
+from connectors.http_mixin import HttpFetcherMixin
 
 load_dotenv()
 
@@ -116,47 +117,19 @@ def validate_order_params(func: Callable[..., T]) -> Callable[..., T]:
     return wrapper
 
 
-class PolymarketConnector(DataConnector):
+class PolymarketConnector(DataConnector, HttpFetcherMixin):
 
     def __init__(self):
         """Initialize the Polymarket connector with proper error handling."""
         self.signature_type = SignatureType.EOA
         self.client: Optional[ClobClient] = None
         self.gamma_url = NetworkConstants.GAMMA_API_URL
-        
-        # Create session with connection pooling and retries
-        self.session = self._create_session()
-        
+
+        # Create session with connection pooling and retries (inherited from HttpFetcherMixin)
+        self.session = self._create_session(max_retries=NetworkConstants.MAX_RETRIES)
+
         # Initialize client
         self._initialize_client()
-    
-    def _create_session(self) -> requests.Session:
-        """
-        Create a requests session with connection pooling and retry strategy.
-        
-        Returns:
-            Configured requests.Session instance
-        """
-        session = requests.Session()
-        
-        # Retry strategy
-        retry_strategy = Retry(
-            total=NetworkConstants.MAX_RETRIES,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET", "POST"]
-        )
-        
-        adapter = HTTPAdapter(
-            max_retries=retry_strategy,
-            pool_connections=10,
-            pool_maxsize=20
-        )
-        
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        
-        return session
     
     def _initialize_client(self) -> None:
         """
@@ -790,10 +763,10 @@ class PolymarketConnector(DataConnector):
     def get_market_data(self, market_id: str) -> Optional[Dict[str, Any]]:
         """
         Get market data from Gamma API.
-        
+
         Args:
             market_id: Market ID or slug
-            
+
         Returns:
             Market data dictionary or None
         """
@@ -802,17 +775,11 @@ class PolymarketConnector(DataConnector):
                 url = f"{self.gamma_url}/events?slug={market_id}"
             else:
                 url = f"{self.gamma_url}/markets/{market_id}"
-            
-            response = self.session.get(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
-            response.raise_for_status()
-            
-            data = response.json()
-            if isinstance(data, list) and len(data) > 0:
+
+            data = self._get_json(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
+            if data and isinstance(data, list) and len(data) > 0:
                 return data[0]
             return data
-        except requests.RequestException as e:
-            logger.error(f"Error fetching market data: {e}")
-            return None
         except Exception as e:
             logger.error(f"Unexpected error fetching market data: {e}")
             return None
@@ -820,19 +787,16 @@ class PolymarketConnector(DataConnector):
     def get_active_market(self, series_id: str = "10192") -> Optional[Dict[str, Any]]:
         """
         Fetch the currently active market for a given series ID.
-        
+
         Args:
             series_id: Series ID (default: "10192" for BTC Up or Down 15m)
-            
+
         Returns:
             Market data dictionary or None
         """
         try:
             url = f"{self.gamma_url}/events?limit=100&closed=false&series_id={series_id}"
-            response = self.session.get(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
-            response.raise_for_status()
-            
-            events = response.json()
+            events = self._get_json(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
             if not events:
                 logger.info(f"No active events found for series ID: {series_id}")
                 return None
@@ -968,22 +932,19 @@ class PolymarketConnector(DataConnector):
     def get_btc_price(self) -> float:
         """
         Fetch current BTC price from Binance API.
-        
+
         Returns:
             BTC price in USDT (float)
         """
         try:
             url = f"{NetworkConstants.BINANCE_API_URL}/ticker/price"
             params = {'symbol': 'BTCUSDT'}
-            response = self.session.get(
-                url, params=params, timeout=NetworkConstants.REQUEST_TIMEOUT
-            )
-            response.raise_for_status()
-            
-            data = response.json()
-            return float(data['price'])
-        except (requests.RequestException, KeyError, ValueError) as e:
-            logger.error(f"Error fetching BTC price from Binance: {e}")
+            data = self._get_json(url, params=params, timeout=NetworkConstants.REQUEST_TIMEOUT)
+            if data:
+                return float(data['price'])
+            return 0.0
+        except (KeyError, ValueError) as e:
+            logger.error(f"Error parsing BTC price from Binance: {e}")
             return 0.0
     
     def get_chainlink_price_at(self, timestamp: pd.Timestamp) -> Optional[float]:
@@ -1092,21 +1053,21 @@ class PolymarketConnector(DataConnector):
     def get_market_resolution(self, market_id: str) -> Optional[Dict[str, Any]]:
         """
         Query Polymarket API for actual market resolution details.
-        
+
         Args:
             market_id: Market ID to query
-            
+
         Returns:
             Resolution data including outcome, price used, etc.
         """
         try:
             # Try the market endpoint to get resolution info
             url = f"{self.gamma_url}/markets/{market_id}"
-            response = self.session.get(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
-            response.raise_for_status()
-            
-            data = response.json()
-            
+            data = self._get_json(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
+
+            if not data:
+                return None
+
             # Extract resolution info
             result = {
                 'market_id': market_id,
@@ -1116,17 +1077,14 @@ class PolymarketConnector(DataConnector):
                 'resolution_price': data.get('resolutionPrice'),
                 'strike': data.get('groupItemThreshold'),
             }
-            
+
             # Also check for outcome prices (1.0 = won, 0.0 = lost)
             if 'outcomePrices' in data:
                 result['outcome_prices'] = data['outcomePrices']
-            
+
             logger.info(f"Market resolution query: {result}")
             return result
-            
-        except requests.RequestException as e:
-            logger.debug(f"Could not query market resolution: {e}")
-            return None
+
         except Exception as e:
             logger.debug(f"Error parsing market resolution: {e}")
             return None
@@ -1134,19 +1092,19 @@ class PolymarketConnector(DataConnector):
     def get_btc_price_at(self, timestamp: pd.Timestamp) -> str:
         """
         Fetch BTC price at a specific timestamp from Binance.
-        
+
         Args:
             timestamp: Timestamp to fetch price for
-            
+
         Returns:
             BTC price as string or "N/A" if unavailable
         """
         try:
             url = f"{NetworkConstants.BINANCE_API_URL}/klines"
-            
+
             start_ms = int(timestamp.timestamp() * 1000)
             end_ms = int((timestamp + pd.Timedelta(minutes=1)).timestamp() * 1000)
-            
+
             params = {
                 'symbol': 'BTCUSDT',
                 'interval': '1m',
@@ -1154,19 +1112,14 @@ class PolymarketConnector(DataConnector):
                 'endTime': end_ms,
                 'limit': 1
             }
-            
-            response = self.session.get(
-                url, params=params, timeout=NetworkConstants.REQUEST_TIMEOUT
-            )
-            response.raise_for_status()
-            
-            data = response.json()
+
+            data = self._get_json(url, params=params, timeout=NetworkConstants.REQUEST_TIMEOUT)
             if data and len(data) > 0:
                 return str(float(data[0][1]))  # Open price
-            
+
             return "N/A"
-        except (requests.RequestException, KeyError, ValueError, IndexError) as e:
-            logger.error(f"Error fetching historical BTC price: {e}")
+        except (KeyError, ValueError, IndexError) as e:
+            logger.error(f"Error parsing historical BTC price: {e}")
             return "N/A"
     
     def _generate_headers(self, method: str, path: str, body: str = None) -> Dict[str, str]:
