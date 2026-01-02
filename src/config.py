@@ -142,6 +142,7 @@ Screen {
     height: 100%;
     margin: 0 1;
     border: solid white;
+    background: #1a1a1a;
 }
 
 #left_cockpit.no_graphs {

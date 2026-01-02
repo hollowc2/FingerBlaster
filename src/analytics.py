@@ -447,19 +447,22 @@ class AnalyticsEngine:
         Returns:
             Tuple of (pnl_yes, pnl_no, total_pnl, pnl_percentage)
         """
+        # Use threshold to handle floating point precision issues
+        MIN_BALANCE_THRESHOLD = 0.1
+        
         pnl_yes = 0.0
         pnl_no = 0.0
         total_cost = 0.0
         
-        # YES position PnL
-        if yes_position > 0 and avg_entry_yes is not None and avg_entry_yes > 0:
+        # YES position PnL - only calculate if position is above threshold
+        if yes_position > MIN_BALANCE_THRESHOLD and avg_entry_yes is not None and avg_entry_yes > 0:
             cost_yes = yes_position * avg_entry_yes
             value_yes = yes_position * current_yes_price
             pnl_yes = value_yes - cost_yes
             total_cost += cost_yes
         
-        # NO position PnL
-        if no_position > 0 and avg_entry_no is not None and avg_entry_no > 0:
+        # NO position PnL - only calculate if position is above threshold
+        if no_position > MIN_BALANCE_THRESHOLD and avg_entry_no is not None and avg_entry_no > 0:
             cost_no = no_position * avg_entry_no
             value_no = no_position * current_no_price
             pnl_no = value_no - cost_no

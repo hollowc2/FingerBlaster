@@ -143,41 +143,42 @@ const ExecutionControls: React.FC<ExecutionControlsProps> = ({
             disabled 
               ? 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed ring-gray-700/50' 
               : isSubmitting === 'YES'
-                ? 'bg-primary/80 border-primary text-surface-darker ring-primary/50 animate-pulse'
-                : 'bg-primary border-primary text-surface-darker ring-primary/50 shadow-glow'
+                ? 'bg-primary/90 border-primary text-black ring-primary/50 animate-pulse'
+                : 'bg-primary border-primary text-black ring-primary/50 shadow-glow hover:bg-[#05e04a] hover:shadow-[0_0_25px_rgba(6,249,87,0.4)]'
           }`}
         >
-          <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-200"></div>
-          <span className="relative z-10 text-xs font-black uppercase tracking-[0.2em] mb-1 opacity-80">
+          <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-200"></div>
+          <span className="relative z-10 text-xs font-black uppercase tracking-[0.2em] mb-1">
             {isSubmitting === 'YES' ? 'SUBMITTING...' : 'BET YES'}
           </span>
           <div className="relative z-10 flex items-baseline gap-1">
              <span className="text-6xl font-black font-mono tracking-tighter drop-shadow-md">{yesPrice}</span>
-             <span className="text-2xl font-bold opacity-60">¢</span>
+             <span className="text-2xl font-bold opacity-70">¢</span>
           </div>
-          <span className="relative z-10 text-[10px] font-mono mt-1 font-black opacity-80 tracking-widest">LONG VOL</span>
+          <span className="relative z-10 text-[10px] font-mono mt-1 font-black tracking-widest">LONG VOL</span>
         </button>
         
         {/* NO Button */}
         <button 
           onClick={() => handleOrder('NO')}
           disabled={disabled || isSubmitting !== null}
-          className={`relative overflow-hidden group h-32 rounded font-bold transition-all flex flex-col items-center justify-center border-4 ${
+          className={`relative overflow-hidden group h-32 rounded font-bold transition-all flex flex-col items-center justify-center border-4 ring-1 ${
             disabled 
-              ? 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed' 
+              ? 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed ring-gray-700/50' 
               : isSubmitting === 'NO'
-                ? 'bg-accent-red border-accent-red text-white animate-pulse'
-                : 'bg-surface-dark border-accent-red text-accent-red hover:bg-accent-red hover:text-white shadow-[0_0_20px_rgba(255,59,48,0.2)]'
+                ? 'bg-accent-red/90 border-accent-red text-white ring-accent-red/50 animate-pulse'
+                : 'bg-accent-red border-accent-red text-white ring-accent-red/50 shadow-[0_0_20px_rgba(255,59,48,0.3)] hover:bg-[#ff4d40] hover:shadow-[0_0_30px_rgba(255,59,48,0.5)]'
           }`}
         >
-          <span className="relative z-10 text-xs font-black uppercase tracking-[0.2em] mb-1 opacity-80 group-hover:text-white">
+          <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-200"></div>
+          <span className="relative z-10 text-xs font-black uppercase tracking-[0.2em] mb-1">
             {isSubmitting === 'NO' ? 'SUBMITTING...' : 'BET NO'}
           </span>
           <div className="relative z-10 flex items-baseline gap-1">
              <span className="text-6xl font-black font-mono tracking-tighter drop-shadow-md">{noPrice}</span>
-             <span className="text-2xl font-bold opacity-60 group-hover:text-white/60">¢</span>
+             <span className="text-2xl font-bold opacity-80">¢</span>
           </div>
-          <span className="relative z-10 text-[10px] font-mono mt-1 font-black opacity-80 tracking-widest group-hover:text-white/80">SHORT VOL</span>
+          <span className="relative z-10 text-[10px] font-mono mt-1 font-black tracking-widest">SHORT VOL</span>
         </button>
       </div>
 

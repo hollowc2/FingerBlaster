@@ -25,13 +25,14 @@ from src.engine import (
     OrderExecutor, RTDSManager
 )
 from src.analytics import AnalyticsEngine, AnalyticsSnapshot, TimerUrgency, EdgeDirection
+from src.strategy_data_sync import StrategyDataProvider, set_provider
 
 logger = logging.getLogger("FingerBlaster")
 
 
 # Event types for callback registration
 CALLBACK_EVENTS: Tuple[str, ...] = (
-    'market_update',      # (strike: str, ends: str)
+    'market_update',      # (strike: str, ends: str, market_name: str)
     'btc_price_update',   # (price: float)
     'price_update',       # (yes_price: float, no_price: float, best_bid: float, best_ask: float)
     'account_stats_update',  # (balance, yes_bal, no_bal, size, avg_yes, avg_no)
@@ -41,6 +42,12 @@ CALLBACK_EVENTS: Tuple[str, ...] = (
     'log',               # (message: str)
     'chart_update',      # (data, ...) - variable args based on chart type
     'analytics_update',  # (snapshot: AnalyticsSnapshot)
+    'order_submitted',   # (side: str, size: float, price: float)
+    'order_filled',      # (side: str, size: float, price: float, order_id: str)
+    'order_failed',      # (side: str, size: float, error: str)
+    'flatten_started',   # () - flatten operation started
+    'flatten_completed', # (orders_processed: int) - flatten operation completed
+    'flatten_failed',    # (error: str) - flatten operation failed
 )
 
 
@@ -315,6 +322,10 @@ class FingerBlasterCore:
         
         # Analytics engine for quantitative analysis
         self.analytics_engine = AnalyticsEngine()
+        
+        # Strategy data provider for low-latency synchronous access
+        self.strategy_data_provider = StrategyDataProvider(self)
+        set_provider(self.strategy_data_provider)
         
         # CEX price tracking for oracle lag
         self._cex_btc_price: Optional[float] = None
@@ -611,10 +622,20 @@ class FingerBlasterCore:
                 f"Market started {time_since_start:.0f}s ago - using API for historical price lookup"
             )
         
-        # Strategy 2: Try Chainlink API
-        chainlink_price = await asyncio.to_thread(
-            self.connector.get_chainlink_price_at, market_start_time
-        )
+        # Strategy 2: Try Chainlink API (with short timeout to prevent blocking)
+        print("[CORE] Trying Chainlink API with 2s timeout...", flush=True)
+        chainlink_price = None
+        try:
+            chainlink_price = await asyncio.wait_for(
+                asyncio.to_thread(self.connector.get_chainlink_price_at, market_start_time),
+                timeout=2.0
+            )
+            print(f"[CORE] Chainlink API returned: {chainlink_price}", flush=True)
+        except asyncio.TimeoutError:
+            print("[CORE] Chainlink API timeout, skipping", flush=True)
+        except Exception as e:
+            print(f"[CORE] Chainlink API error: {e}", flush=True)
+        
         if chainlink_price and chainlink_price > 0:
             strike = f"{chainlink_price:,.2f}"
             self.log_msg(
@@ -624,10 +645,20 @@ class FingerBlasterCore:
             await self.market_manager.set_market(new_market)
             return strike
         
-        # Strategy 3: Fallback to Binance
-        price_str = await asyncio.to_thread(
-            self.connector.get_btc_price_at, market_start_time
-        )
+        # Strategy 3: Fallback to Binance (with short timeout)
+        print("[CORE] Trying Binance fallback with 2s timeout...", flush=True)
+        price_str = None
+        try:
+            price_str = await asyncio.wait_for(
+                asyncio.to_thread(self.connector.get_btc_price_at, market_start_time),
+                timeout=2.0
+            )
+            print(f"[CORE] Binance fallback returned: {price_str}", flush=True)
+        except asyncio.TimeoutError:
+            print("[CORE] Binance fallback timeout", flush=True)
+        except Exception as e:
+            print(f"[CORE] Binance fallback error: {e}", flush=True)
+        
         if price_str and price_str != "N/A":
             self.log_msg(
                 f"WARNING: Dynamic strike using Binance fallback (Chainlink not available): ${price_str}"
@@ -637,6 +668,7 @@ class FingerBlasterCore:
             return price_str
         
         # Could not resolve
+        print("[CORE] Could not resolve dynamic strike, using 'Dynamic'", flush=True)
         self.log_msg(
             f"WARNING: Could not determine dynamic strike price at market start ({market_start_time}). "
             f"Market started {time_since_start:.0f}s ago. This may cause incorrect strike calculation."
@@ -653,61 +685,109 @@ class FingerBlasterCore:
         if rtds_price and rtds_price != chainlink_price:
             self.log_msg(f"RTDS Binance BTC/USDT: ${rtds_price:,.2f}")
         if not rtds_price:
-            binance_price = await asyncio.to_thread(self.connector.get_btc_price)
-            if binance_price:
-                self.log_msg(f"Binance API BTC Price: ${binance_price:,.2f}")
+            try:
+                binance_price = await asyncio.wait_for(
+                    asyncio.to_thread(self.connector.get_btc_price),
+                    timeout=5.0
+                )
+                if binance_price:
+                    self.log_msg(f"Binance API BTC Price: ${binance_price:,.2f}")
+            except asyncio.TimeoutError:
+                self.log_msg("Binance API timeout")
     
     async def update_market_status(self) -> None:
         """Update market status and search for new markets.
         
         Improved error handling with recovery strategies.
         """
+        print("[CORE] update_market_status called", flush=True)
         market = await self.market_manager.get_market()
+        print(f"[CORE] Current market: {'exists' if market else 'None'}", flush=True)
         if not market:
             # Search for new market
             try:
-                new_market = await asyncio.to_thread(
-                    self.connector.get_active_market
-                )
+                print("[CORE] Searching for new market...", flush=True)
+                try:
+                    new_market = await asyncio.wait_for(
+                        asyncio.to_thread(self.connector.get_active_market),
+                        timeout=10.0
+                    )
+                except asyncio.TimeoutError:
+                    print("[CORE] get_active_market timeout", flush=True)
+                    new_market = None
+                print(f"[CORE] get_active_market returned: {'found' if new_market else 'None'}", flush=True)
                 if new_market:
+                    print("[CORE] Setting market...", flush=True)
                     success = await self.market_manager.set_market(new_market)
+                    print(f"[CORE] set_market: {success}", flush=True)
                     if success:
+                        print("[CORE] Clearing YES history...", flush=True)
                         await self.history_manager.clear_yes_history()
                         strike = str(new_market.get('strike_price', 'N/A'))
                         
                         # Resolve dynamic strikes
+                        print("[CORE] Getting market start time...", flush=True)
                         market_start_time = await self.market_manager.get_market_start_time()
                         if strike == "Dynamic" and market_start_time:
+                            print("[CORE] Resolving dynamic strike...", flush=True)
                             strike = await self._resolve_dynamic_strike(new_market, market_start_time)
+                        
+                        # Ensure resolved strike is stored in market data for resolution calculation
+                        # This is critical - resolution reads from market.get('strike_price')
+                        if strike and strike not in ('N/A', 'None', '', 'Pending'):
+                            new_market['strike_price'] = strike
+                            # Update the stored market data
+                            await self.market_manager.set_market(new_market)
+                            logger.info(f"Strike stored in market data: {strike}")
+                        else:
+                            logger.warning(f"Invalid strike after resolution attempt: {strike}")
                         
                         self.log_msg(
                             f"Market Found: Strike={strike}, End={new_market.get('end_date', 'N/A')}"
                         )
+                        print(f"[CORE] Market found: Strike={strike}", flush=True)
                         
                         # Log current BTC prices for comparison
+                        print("[CORE] Logging BTC prices...", flush=True)
                         await self._log_current_btc_prices()
                         
+                        print("[CORE] Starting WS manager...", flush=True)
                         await self.ws_manager.start()
+                        print("[CORE] Starting RTDS manager...", flush=True)
                         # Start RTDS for real-time BTC prices
                         await self.rtds_manager.start()
+                        print("[CORE] RTDS started", flush=True)
                         
                         # Emit market update
                         ends = self._format_ends(new_market.get('end_date', 'N/A'))
-                        self._emit('market_update', strike, ends)
+                        # Extract market name (prefer question, then title, then slug)
+                        market_name = (new_market.get('question') or 
+                                      new_market.get('title') or 
+                                      new_market.get('event_slug') or 
+                                      'Market')
+                        self._emit('market_update', strike, ends, market_name)
                         
                         # Reset countdown display
+                        print("[CORE] Updating countdown...", flush=True)
                         await self.update_countdown()
                         
                         # Re-check prior outcomes after a short delay
                         # (API may not have updated immediately after market close)
-                        await asyncio.sleep(2.0)
-                        await self._check_and_add_prior_outcomes(retry_count=3)
+                        # Run in background task to avoid blocking startup
+                        print("[CORE] Scheduling prior outcomes check in background...", flush=True)
+                        asyncio.create_task(self._check_and_add_prior_outcomes_with_timeout(retry_count=3))
             except Exception as e:
                 logger.error(f"Error searching for market: {e}", exc_info=True)
                 # Recovery: retry after delay
                 await asyncio.sleep(1.0)
         
-        await self.check_if_market_expired()
+        # Check market expiry with timeout to prevent blocking
+        try:
+            await asyncio.wait_for(self.check_if_market_expired(), timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.warning("check_if_market_expired timed out")
+        except Exception as e:
+            logger.error(f"Error in check_if_market_expired: {e}", exc_info=True)
     
     async def update_btc_price(self) -> None:
         """Update BTC price and refresh chart.
@@ -725,7 +805,14 @@ class FingerBlasterCore:
             
             # Fallback to Binance API if RTDS not available
             logger.debug("RTDS price not available, falling back to Binance API")
-            price = await asyncio.to_thread(self.connector.get_btc_price)
+            try:
+                price = await asyncio.wait_for(
+                    asyncio.to_thread(self.connector.get_btc_price),
+                    timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                logger.debug("Binance API timeout in update_btc_price")
+                return
             if price and isinstance(price, (int, float)) and price > 0:
                 btc_price = float(price)
                 await self.history_manager.add_btc_price(btc_price)
@@ -764,13 +851,23 @@ class FingerBlasterCore:
                         no_bal = self.connector.get_token_balance(n_id)
                 return float(bal or 0.0), float(yes_bal or 0.0), float(no_bal or 0.0)
             
-            bal, y, n = await asyncio.to_thread(get_stats)
+            try:
+                bal, y, n = await asyncio.wait_for(
+                    asyncio.to_thread(get_stats),
+                    timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                logger.debug("Account stats fetch timeout")
+                return
             
-            # Reset average entry prices if positions are zero
-            if y == 0:
+            # Reset average entry prices if positions are zero (using threshold to handle floating point precision)
+            MIN_BALANCE_THRESHOLD = 0.1
+            if y <= MIN_BALANCE_THRESHOLD:
                 self.avg_entry_price_yes = None
-            if n == 0:
+                self.position_tracker.reset('YES')
+            if n <= MIN_BALANCE_THRESHOLD:
                 self.avg_entry_price_no = None
+                self.position_tracker.reset('NO')
             
             # Pass average entry prices to UI
             self._emit('account_stats_update', bal, y, n, self.selected_size, 
@@ -900,6 +997,16 @@ class FingerBlasterCore:
                 order_size_usd=self.selected_size
             )
             
+            # Update strategy data provider cache (synchronous, low-latency)
+            self.strategy_data_provider.update_cache(
+                snapshot=snapshot,
+                market=market,
+                btc_price=btc_price,
+                strike=strike_price,
+                time_remaining=time_remaining,
+                prior_outcomes=outcomes_list
+            )
+            
             self._emit('analytics_update', snapshot)
             
         except Exception as e:
@@ -1010,8 +1117,19 @@ class FingerBlasterCore:
             strike_str = str(market.get('strike_price', '')).replace(',', '').replace('$', '').strip()
             strike_val = self._parse_strike(strike_str)
             strike_source = market.get('_strike_source', 'API')
+            
+            # Log strike details for debugging
+            logger.info(f"=== STRIKE VALIDATION FOR RESOLUTION ===")
+            logger.info(f"  Raw strike from market: {market.get('strike_price')}")
+            logger.info(f"  Cleaned strike string: {strike_str}")
+            logger.info(f"  Parsed strike value: {strike_val}")
+            logger.info(f"  Strike source: {strike_source}")
 
             if strike_val is None:
+                logger.error(f"!!! STRIKE UNAVAILABLE FOR RESOLUTION !!!")
+                logger.error(f"  Raw strike: {market.get('strike_price')}")
+                logger.error(f"  Cleaned: {strike_str}")
+                logger.error(f"  This will cause incorrect resolution calculation!")
                 logger.warning("Strike unavailable or unparseable (%s); resolution deferred", strike_str)
                 self._emit('resolution', None)
                 return
@@ -1093,8 +1211,8 @@ class FingerBlasterCore:
                 # Update display immediately
                 self._update_prior_outcomes_display()
                 
-                # Log the update
-                arrows = ''.join(['▲' if o == 'YES' else '▼' for o in self.displayed_prior_outcomes])
+                # Log the update (oldest to newest, left to right)
+                arrows = ''.join(['▲' if o == 'YES' else '▼' for o in reversed(self.displayed_prior_outcomes)])
                 logger.info(f"Added {self.last_resolution} to prior outcomes: {arrows}")
             
             self.last_resolution = None
@@ -1114,6 +1232,27 @@ class FingerBlasterCore:
             self._emit('resolution', None)  # Hide overlay
         except Exception as e:
             logger.error(f"Error resetting market: {e}", exc_info=True)
+    
+    async def _check_and_add_prior_outcomes_with_timeout(self, retry_count: int = 0) -> None:
+        """Wrapper for _check_and_add_prior_outcomes with timeout to prevent hanging.
+        
+        Args:
+            retry_count: Number of retries if no matching outcomes found
+        """
+        try:
+            print("[CORE] Checking prior outcomes (with 15s timeout)...", flush=True)
+            await asyncio.wait_for(
+                self._check_and_add_prior_outcomes(retry_count=retry_count),
+                timeout=15.0
+            )
+            print("[CORE] Prior outcomes checked", flush=True)
+        except asyncio.TimeoutError:
+            logger.warning("Prior outcomes check timed out after 15s, continuing without blocking")
+            print("[CORE] Prior outcomes check timed out, continuing...", flush=True)
+            # Don't clear existing outcomes on timeout
+        except Exception as e:
+            logger.error(f"Error in prior outcomes check: {e}", exc_info=True)
+            print(f"[CORE] Prior outcomes check error: {e}", flush=True)
     
     async def _check_and_add_prior_outcomes(self, retry_count: int = 0) -> None:
         """Check and fetch prior outcomes from Polymarket API.
@@ -1225,8 +1364,8 @@ class FingerBlasterCore:
                 self.displayed_prior_outcomes = consecutive_outcomes
                 self._update_prior_outcomes_display()
                 
-                # Build arrow string for log message
-                arrows = ''.join(['▲' if o == 'YES' else '▼' for o in consecutive_outcomes])
+                # Build arrow string for log message (oldest to newest, left to right)
+                arrows = ''.join(['▲' if o == 'YES' else '▼' for o in reversed(consecutive_outcomes)])
                 self.log_msg(
                     f"Prior outcomes loaded: {arrows} ({len(consecutive_outcomes)} markets)"
                 )
@@ -1248,7 +1387,14 @@ class FingerBlasterCore:
                     # Invalidate cache to force fresh fetch
                     self._prior_outcomes_cache = []
                     self._prior_outcomes_cache_timestamp = 0.0
-                    await self._check_and_add_prior_outcomes(retry_count=retry_count - 1)
+                    # Use timeout wrapper for recursive call to prevent hanging
+                    try:
+                        await asyncio.wait_for(
+                            self._check_and_add_prior_outcomes(retry_count=retry_count - 1),
+                            timeout=15.0
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Prior outcomes retry timed out, stopping retries")
                     return
                 
                 # If we still have displayed outcomes (from resolution), keep them
@@ -1290,11 +1436,14 @@ class FingerBlasterCore:
         
         # Fetch fresh data from API
         try:
-            closed_markets = await asyncio.to_thread(
-                self.connector.get_closed_markets,
-                series_id="10192",  # BTC 15m series
-                limit=20,  # Get last 20 markets (more than enough for max_prior_outcomes)
-                ascending=False  # Most recent first
+            closed_markets = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.connector.get_closed_markets,
+                    "10192",  # series_id: BTC 15m series
+                    20,  # limit: Get last 20 markets
+                    False  # ascending: Most recent first
+                ),
+                timeout=8.0  # Reduced timeout to prevent hanging
             )
             
             if closed_markets:
@@ -1403,9 +1552,26 @@ class FingerBlasterCore:
             size = self.selected_size
             self.log_msg(f"Order: BUY {side} (${size:.2f})")
             
+            # Emit order submitted IMMEDIATELY with estimated price (for fast UI feedback)
+            # Use cached prices if available, otherwise use fallback
+            estimated_price = 0.5  # Default fallback
+            if self._cached_prices is not None:
+                # Use cached prices for immediate notification
+                yes_price, no_price, best_bid, best_ask = self._cached_prices
+                if side.upper() == 'YES':
+                    estimated_price = best_ask if best_ask > 0 else yes_price
+                else:  # NO
+                    no_best_ask = 1.0 - best_bid if best_bid > 0 else no_price
+                    estimated_price = no_best_ask
+            
+            # Emit order submitted callback IMMEDIATELY (before any async operations)
+            self._emit('order_submitted', side, size, estimated_price)
+            
             token_map = await self.market_manager.get_token_map()
             if not token_map:
-                self.log_msg("Error: Token map not available")
+                error_msg = "Error: Token map not available"
+                self.log_msg(error_msg)
+                self._emit('order_failed', side, size, error_msg)
                 return
             
             # Get current market price before placing order (for average entry price calculation)
@@ -1434,7 +1600,11 @@ class FingerBlasterCore:
             resp = await self.order_executor.execute_order(side, size, token_map)
             
             if resp and resp.get('orderID'):
-                self.log_msg(f"Order FILLED: {resp['orderID'][:10]}...")
+                order_id = resp.get('orderID', '')
+                self.log_msg(f"Order FILLED: {order_id[:10]}...")
+                
+                # Emit order filled callback
+                self._emit('order_filled', side, size, entry_price, order_id)
                 
                 # Update average entry price with proper validation
                 self._update_average_entry_price(
@@ -1447,10 +1617,14 @@ class FingerBlasterCore:
                 
                 await self.update_account_stats()
             else:
+                error_msg = "Order execution failed - no order ID returned"
                 self.log_msg("Order FAILED")
+                self._emit('order_failed', side, size, error_msg)
         except Exception as e:
-            self.log_msg(f"Execution Error: {e}")
+            error_msg = f"Execution Error: {e}"
+            self.log_msg(error_msg)
             logger.error(f"Order placement error: {e}", exc_info=True)
+            self._emit('order_failed', side, self.selected_size, error_msg)
     
     def _update_average_entry_price(
         self,
@@ -1516,23 +1690,36 @@ class FingerBlasterCore:
     async def flatten(self) -> None:
         """Flatten all positions with improved error handling."""
         self.log_msg("Action: FLATTEN")
+        
+        # Emit flatten started callback immediately
+        self._emit('flatten_started')
+        
         token_map = await self.market_manager.get_token_map()
         if not token_map:
-            self.log_msg("Error: Token map not ready.")
+            error_msg = "Error: Token map not ready."
+            self.log_msg(error_msg)
+            self._emit('flatten_failed', error_msg)
             return
         
         try:
             results = await self.order_executor.flatten_positions(token_map)
+            orders_processed = len(results) if results else 0
+            
             if results:
-                self.log_msg(f"Flatten completed. {len(results)} orders processed.")
+                self.log_msg(f"Flatten completed. {orders_processed} orders processed.")
             else:
                 self.log_msg("Flatten completed. No orders to process.")
             
             # Reset all position tracking after flattening
             self.position_tracker.reset()
+            
+            # Emit flatten completed callback
+            self._emit('flatten_completed', orders_processed)
         except Exception as e:
-            self.log_msg(f"Flatten error: {e}")
+            error_msg = f"Flatten error: {e}"
+            self.log_msg(error_msg)
             logger.error(f"Flatten error: {e}", exc_info=True)
+            self._emit('flatten_failed', error_msg)
         
         await self.update_account_stats()
     

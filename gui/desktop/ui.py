@@ -45,15 +45,10 @@ class MarketPanel(QFrame):
         self.btc_label.setStyleSheet("color: #00ff00; font-size: 11pt;")
         layout.addWidget(self.btc_label)
         
-        # Delta + BPS row
-        self.delta_label = QLabel("DELTA: N/A (0bps)")
-        self.delta_label.setStyleSheet("color: white; font-size: 11pt;")
-        layout.addWidget(self.delta_label)
-        
-        # Sigma / Z-Score
-        self.sigma_label = QLabel("SIGMA: ---")
-        self.sigma_label.setStyleSheet("color: #00ffff; font-size: 11pt;")
-        layout.addWidget(self.sigma_label)
+        # Oracle Lag
+        self.oracle_label = QLabel("ORACLE: SYNC")
+        self.oracle_label.setStyleSheet("color: #00ff00; font-size: 10pt;")
+        layout.addWidget(self.oracle_label)
         
         # Prior Outcomes
         self.prior_label = QLabel("PRIOR: ---")
@@ -65,10 +60,15 @@ class MarketPanel(QFrame):
         self.regime_label.setStyleSheet("color: #888888; font-size: 10pt;")
         layout.addWidget(self.regime_label)
         
-        # Oracle Lag
-        self.oracle_label = QLabel("ORACLE: SYNC")
-        self.oracle_label.setStyleSheet("color: #00ff00; font-size: 10pt;")
-        layout.addWidget(self.oracle_label)
+        # Sigma / Z-Score
+        self.sigma_label = QLabel("SIGMA: ---")
+        self.sigma_label.setStyleSheet("color: #00ffff; font-size: 11pt;")
+        layout.addWidget(self.sigma_label)
+        
+        # Delta + BPS row
+        self.delta_label = QLabel("DELTA: N/A (0bps)")
+        self.delta_label.setStyleSheet("color: white; font-size: 11pt;")
+        layout.addWidget(self.delta_label)
         
         # Time Left - larger for urgency
         self.time_label = QLabel("REMAIN: N/A")
@@ -225,71 +225,71 @@ class PricePanel(QFrame):
         # Title
         title = QLabel("═══ LIVE PRICES ═══")
         title.setStyleSheet("font-weight: bold; color: #00ffff; font-size: 13pt;")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(title)
         
         # YES Section
         yes_label = QLabel("YES")
         yes_label.setStyleSheet("font-weight: bold; font-size: 11pt; color: #00ff00;")
-        yes_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        yes_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(yes_label)
         
         self.yes_price_label = QLabel("0.00")
         self.yes_price_label.setStyleSheet("color: #00ff00; font-weight: bold; font-size: 28pt;")
-        self.yes_price_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.yes_price_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.yes_price_label)
         
         # YES Fair Value / Edge
         self.yes_fv_label = QLabel("FV: --- | EDGE: ---")
         self.yes_fv_label.setStyleSheet("color: #888888; font-size: 9pt;")
-        self.yes_fv_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.yes_fv_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.yes_fv_label)
         
         # YES Liquidity
         self.yes_liq_label = QLabel("DEPTH: $0 | SLIP: 0bps")
         self.yes_liq_label.setStyleSheet("color: #666666; font-size: 9pt;")
-        self.yes_liq_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.yes_liq_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.yes_liq_label)
         
         # YES Spread
         self.yes_spread_label = QLabel("SPREAD: 0.00 / 0.00")
         self.yes_spread_label.setStyleSheet("color: #888888; font-size: 9pt;")
-        self.yes_spread_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.yes_spread_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.yes_spread_label)
         
         # Separator
         sep = QLabel("─" * 30)
         sep.setStyleSheet("color: #333333; font-size: 8pt;")
-        sep.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sep.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(sep)
         
         # NO Section
         no_label = QLabel("NO")
         no_label.setStyleSheet("font-weight: bold; font-size: 11pt; color: #ff0000;")
-        no_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        no_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(no_label)
         
         self.no_price_label = QLabel("0.00")
         self.no_price_label.setStyleSheet("color: #ff0000; font-weight: bold; font-size: 28pt;")
-        self.no_price_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.no_price_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.no_price_label)
         
         # NO Fair Value / Edge
         self.no_fv_label = QLabel("FV: --- | EDGE: ---")
         self.no_fv_label.setStyleSheet("color: #888888; font-size: 9pt;")
-        self.no_fv_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.no_fv_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.no_fv_label)
         
         # NO Liquidity
         self.no_liq_label = QLabel("DEPTH: $0 | SLIP: 0bps")
         self.no_liq_label.setStyleSheet("color: #666666; font-size: 9pt;")
-        self.no_liq_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.no_liq_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.no_liq_label)
         
         # NO Spread
         self.no_spread_label = QLabel("SPREAD: 0.00 / 0.00")
         self.no_spread_label.setStyleSheet("color: #888888; font-size: 9pt;")
-        self.no_spread_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.no_spread_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.no_spread_label)
         
         layout.addStretch()

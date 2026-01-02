@@ -360,8 +360,8 @@ The application creates a `data/` directory containing:
    - Maintains historical price data for dynamic strike price resolution
 
 8. **UI Components**:
-   - **Terminal UI** (`main.py`, `src/ui.py`): Textual-based interface
-   - **Desktop UI** (`main_pyqt.py`, `src/ui_pyqt.py`): PyQt6-based interface
+   - **Terminal UI** (`gui/terminal/main.py`, `gui/terminal/ui.py`): Textual-based interface
+   - **Desktop UI** (`gui/desktop/main.py`, `gui/desktop/ui.py`): PyQt6-based interface
 
 ### Data Flow
 

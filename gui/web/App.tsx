@@ -68,6 +68,13 @@ const AppContent: React.FC = () => {
     return fb.btcPrice - strikeValue;
   }, [fb.btcPrice, strikeValue]);
 
+  // Calculate strike line Y position in chart coordinates
+  const strikeLineY = useMemo(() => {
+    if (!strikeValue || minPrice === maxPrice) return null;
+    const y = 100 - ((strikeValue - minPrice) / (maxPrice - minPrice || 1)) * 100;
+    return Math.max(0, Math.min(100, y));
+  }, [strikeValue, minPrice, maxPrice]);
+
   // Calculate Z-score color gradient
   const zScoreColor = useMemo(() => {
     if (fb.analytics?.zScore == null) return 'text-white';
@@ -158,13 +165,6 @@ const AppContent: React.FC = () => {
             <span className="material-symbols-outlined text-sm">account_balance_wallet</span>
             <span>${fb.balance.toFixed(2)}</span>
           </button>
-          <button className="flex items-center justify-center size-9 rounded border border-white/10 bg-surface-dark hover:bg-white/5 transition-colors text-white">
-            <span className="material-symbols-outlined text-[20px]">settings</span>
-          </button>
-          <button className="flex items-center justify-center size-9 rounded border border-white/10 bg-surface-dark hover:bg-white/5 transition-colors text-white relative">
-            <span className="absolute top-2 right-2.5 size-1.5 bg-accent-red rounded-full"></span>
-            <span className="material-symbols-outlined text-[20px]">notifications</span>
-          </button>
         </div>
       </header>
 
@@ -205,8 +205,6 @@ const AppContent: React.FC = () => {
             <StatCard 
               label="Basis Points (BPS)" 
               value={fb.analytics?.basisPoints != null ? fb.analytics?.basisPoints.toFixed(0) : '--'}
-              subValue={fb.analytics?.basisPoints != null ? (fb.analytics?.basisPoints >= 0 ? '+' : '') + fb.analytics?.basisPoints.toFixed(0) : ''}
-              subValueColor={(fb.analytics?.basisPoints ?? 0) >= 0 ? 'text-primary' : 'text-accent-red'}
               trend={(fb.analytics?.basisPoints ?? 0) >= 0 ? 'up' : 'down'}
               valueColor={(fb.analytics?.basisPoints ?? 0) >= 0 ? 'text-primary' : 'text-accent-red'}
             />
@@ -223,17 +221,14 @@ const AppContent: React.FC = () => {
             <StatCard 
               label="Z-Score" 
               value={fb.analytics?.zScore?.toFixed(2) || '--'}
-              subValue={fb.analytics?.sigmaLabel || 'No Signal'}
-              subValueColor="text-gray-500"
               valueColor={zScoreColor.textClass}
               customValueStyle={{ color: zScoreColor.color }}
+              valueIcon="σ"
             />
             {fb.analytics?.fairValueYes != null && (
               <StatCard 
                 label="Fair Value" 
                 value={`${(fb.analytics.fairValueYes * 100).toFixed(1)}%`}
-                subValue={`Current: ${fb.yesPrice}%`}
-                subValueColor={fb.yesPrice > (fb.analytics.fairValueYes * 100) ? 'text-accent-red' : 'text-primary'}
                 valueColor={fb.yesPrice > (fb.analytics.fairValueYes * 100) ? 'text-accent-red' : 'text-primary'}
               />
             )}
@@ -287,8 +282,6 @@ const AppContent: React.FC = () => {
             <div className="flex justify-between items-center px-4 py-3 border-b border-white/5 bg-surface-dark/50 z-20">
               <div className="flex gap-4">
                 <span className="text-xs font-bold text-white bg-primary/20 border border-primary/50 px-2 py-1 rounded cursor-pointer">LIVE</span>
-                <span className="text-xs font-bold text-gray-500 hover:text-white cursor-pointer transition-colors px-2 py-1">10S</span>
-                <span className="text-xs font-bold text-gray-500 hover:text-white cursor-pointer transition-colors px-2 py-1">1M</span>
               </div>
               <div className="text-xs text-primary font-mono font-bold flex items-center gap-2">
                 <span className={`size-1.5 rounded-full ${fb.connected ? 'bg-primary animate-ping' : 'bg-gray-500'}`}></span>
@@ -301,13 +294,47 @@ const AppContent: React.FC = () => {
               
               <svg className="w-full h-full z-10" preserveAspectRatio="none" viewBox="0 0 100 100">
                 <defs>
-                  <linearGradient id="chartGradient" x1="0" x2="0" y1="0" y2="1">
+                  <linearGradient id="chartGradientGreen" x1="0" x2="0" y1="0" y2="1">
                     <stop offset="0%" stopColor="#06f957" stopOpacity="0.4"></stop>
                     <stop offset="100%" stopColor="#06f957" stopOpacity="0"></stop>
                   </linearGradient>
+                  <linearGradient id="chartGradientRed" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stopColor="#FF0000" stopOpacity="0.4"></stop>
+                    <stop offset="100%" stopColor="#FF0000" stopOpacity="0"></stop>
+                  </linearGradient>
                 </defs>
-                {fillPath && <path d={fillPath} fill="url(#chartGradient)" vectorEffect="non-scaling-stroke"></path>}
-                {chartPath && <path d={chartPath} fill="none" stroke="#06f957" strokeWidth="3" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round"></path>}
+                {fillPath && (
+                  <path 
+                    d={fillPath} 
+                    fill={strikeValue && fb.btcPrice && fb.btcPrice < strikeValue ? "url(#chartGradientRed)" : "url(#chartGradientGreen)"} 
+                    vectorEffect="non-scaling-stroke"
+                  />
+                )}
+                {chartPath && (
+                  <path 
+                    d={chartPath} 
+                    fill="none" 
+                    stroke={strikeValue && fb.btcPrice && fb.btcPrice < strikeValue ? "#FF0000" : "#06f957"} 
+                    strokeWidth="3" 
+                    vectorEffect="non-scaling-stroke" 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round"
+                  />
+                )}
+                
+                {/* Strike Price Line - Always Bright Yellow Horizontal Line */}
+                {strikeLineY !== null && (
+                  <line 
+                    x1="0" 
+                    y1={strikeLineY}
+                    x2="100" 
+                    y2={strikeLineY}
+                    stroke="#FFFF00" 
+                    strokeWidth="1" 
+                    strokeOpacity="1"
+                    style={{ filter: 'drop-shadow(0 0 2px rgba(255, 255, 0, 0.8))' }}
+                  />
+                )}
                 
                 {/* Dynamic Price Marker */}
                 {chartPath && (
@@ -315,7 +342,7 @@ const AppContent: React.FC = () => {
                     cx="100" 
                     cy={100 - ((currentPrice - minPrice) / (maxPrice - minPrice || 1)) * 100} 
                     r="1.5" 
-                    fill="#06f957" 
+                    fill={strikeValue && fb.btcPrice && fb.btcPrice < strikeValue ? "#FF0000" : "#06f957"} 
                     className="animate-pulse shadow-glow"
                   ></circle>
                 )}
@@ -374,15 +401,15 @@ const AppContent: React.FC = () => {
           </div>
 
           {/* Open Positions List */}
-          <div className="bg-surface-dark border border-white/5 rounded-lg flex-1 flex flex-col overflow-hidden">
+          <div className="bg-surface-dark border border-white/5 rounded-lg flex-1 flex flex-col overflow-hidden max-h-[250px]">
             <div className="p-4 border-b border-white/5 flex items-center justify-between">
               <h3 className="text-sm font-bold text-white uppercase tracking-widest">Open Positions</h3>
               <span className="bg-white/10 text-white text-[10px] px-1.5 py-0.5 rounded font-bold">
-                {(fb.yesBalance > 0 ? 1 : 0) + (fb.noBalance > 0 ? 1 : 0)}
+                {(fb.yesBalance > 0.1 ? 1 : 0) + (fb.noBalance > 0.1 ? 1 : 0)}
               </span>
             </div>
             <div className="flex-1 overflow-y-auto custom-scrollbar">
-              {fb.yesBalance > 0 && (
+              {fb.yesBalance > 0.1 && (
                 <div className="p-4 border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer group">
                   <div className="flex justify-between items-start mb-2">
                     <span className="font-bold text-sm text-primary">
@@ -402,7 +429,7 @@ const AppContent: React.FC = () => {
                   </div>
                 </div>
               )}
-              {fb.noBalance > 0 && (
+              {fb.noBalance > 0.1 && (
                 <div className="p-4 border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer group">
                   <div className="flex justify-between items-start mb-2">
                     <span className="font-bold text-sm text-accent-red">
@@ -422,7 +449,7 @@ const AppContent: React.FC = () => {
                   </div>
                 </div>
               )}
-              {fb.yesBalance === 0 && fb.noBalance === 0 && (
+              {fb.yesBalance <= 0.1 && fb.noBalance <= 0.1 && (
                 <div className="p-4 text-center text-gray-500 text-sm">
                   No open positions
                 </div>

@@ -115,8 +115,8 @@ class FingerBlasterPyQtApp(QMainWindow):
         self.config = self.core.config
         
         # UI state
-        self.graphs_visible = True
-        self.log_visible = True
+        self.graphs_visible = False
+        self.log_visible = False
         
         # Create signals object for thread-safe updates
         # Parent it to self so it lives with the window
@@ -251,6 +251,7 @@ class FingerBlasterPyQtApp(QMainWindow):
         
         charts_widget.setLayout(charts_layout)
         self.charts_widget = charts_widget
+        self.charts_widget.hide()  # Start minimized
         top_splitter.addWidget(charts_widget)
         
         top_splitter.setStretchFactor(0, 1)
@@ -261,14 +262,15 @@ class FingerBlasterPyQtApp(QMainWindow):
         # Log panel
         self.log_panel = QTextEdit()
         self.log_panel_height = 150
-        self.log_panel.setMaximumHeight(self.log_panel_height)
-        self.log_panel.setMinimumHeight(self.log_panel_height)
+        self.log_panel.setMaximumHeight(0)  # Start minimized
+        self.log_panel.setMinimumHeight(0)  # Start minimized
         self.log_panel.setStyleSheet("background-color: #000000; color: #00ffff; border: 2px solid white;")
         self.log_panel.setReadOnly(True)
         # Prevent log panel from accepting keyboard focus so shortcuts work
         self.log_panel.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         # Install event filter only on log panel to prevent it from processing shortcut keys
         self.log_panel.installEventFilter(self)
+        self.log_panel.hide()  # Start hidden
         main_layout.addWidget(self.log_panel)
         
         # Resolution overlay (will be resized on show)
@@ -494,9 +496,14 @@ class FingerBlasterPyQtApp(QMainWindow):
         self.signals.analytics_update.emit(snapshot)
     
     def _on_prior_outcomes_update_sync(self, outcomes: list):
-        """Handle prior outcomes update from core."""
+        """Handle prior outcomes update from core.
+        
+        Displays arrows left-to-right as oldest-to-newest (like a timeline).
+        The rightmost arrow is the most recent outcome.
+        """
         outcome_str = ""
-        for outcome in outcomes:
+        # Reverse so oldest is first (left), newest is last (right)
+        for outcome in reversed(outcomes):
             if outcome == "YES":
                 outcome_str += '<span style="color: #00ff00;">▲</span>'  # Green up arrow
             elif outcome == "NO":

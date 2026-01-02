@@ -610,7 +610,9 @@ class PolymarketConnector(DataConnector):
             'token_id': clob_token_ids[0],  # Primary token
             'token_ids': clob_token_ids,
             'end_date': event.get('endDate'),
-            'strike_price': str(strike_price)
+            'strike_price': str(strike_price),
+            'question': market.get('question', '') or event.get('question', ''),
+            'title': market.get('title', '') or event.get('title', '')
         }
         
         # Include token map if requested
