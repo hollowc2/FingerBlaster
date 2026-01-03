@@ -585,35 +585,43 @@ class TradingTUI(App):
         self.title = self.market_name
 
     def _update_cards(self) -> None:
-        if not self.analytics: return
         try:
             yes_card = self.query_one("#card-yes", DataCard)
+            # Use analytics data if available, otherwise use defaults
+            yes_depth = self.analytics.yes_ask_depth or 0.0 if self.analytics else 0.0
+            yes_fv = self.analytics.fair_value_yes if self.analytics else None
+            yes_edge = self.analytics.edge_bps_yes if self.analytics else None
             yes_card.update(
                 self.yes_price, self.best_bid, self.best_ask,
-                self.analytics.yes_ask_depth or 0.0, 
-                self.analytics.fair_value_yes, self.analytics.edge_bps_yes
+                yes_depth,
+                yes_fv, yes_edge
             )
             # Add green background if significant positive edge (>750bps)
-            if self.analytics.edge_bps_yes is not None and self.analytics.edge_bps_yes > 750:
+            if yes_edge is not None and yes_edge > 750:
                 yes_card.add_class("bg-highlight-green")
             else:
                 yes_card.remove_class("bg-highlight-green")
-            
+
             no_bid = 1.0 - self.best_ask if self.best_ask < 1.0 else 0.0
             no_ask = 1.0 - self.best_bid if self.best_bid > 0.0 else 1.0
             no_card = self.query_one("#card-no", DataCard)
+            # Use analytics data if available, otherwise use defaults
+            no_depth = self.analytics.no_ask_depth or 0.0 if self.analytics else 0.0
+            no_fv = self.analytics.fair_value_no if self.analytics else None
+            no_edge = self.analytics.edge_bps_no if self.analytics else None
             no_card.update(
                 self.no_price, no_bid, no_ask,
-                self.analytics.no_ask_depth or 0.0,
-                self.analytics.fair_value_no, self.analytics.edge_bps_no
+                no_depth,
+                no_fv, no_edge
             )
             # Add red background if significant positive edge (>750bps) for NO
             # Note: For NO, a positive edge_bps_no means it's favorable to buy NO
-            if self.analytics.edge_bps_no is not None and self.analytics.edge_bps_no > 750:
+            if no_edge is not None and no_edge > 750:
                 no_card.add_class("bg-highlight-red")
             else:
                 no_card.remove_class("bg-highlight-red")
-        except: pass
+        except Exception as e:
+            logger.debug(f"Error updating cards: {e}")
 
     async def action_place_order(self, side: str) -> None:
         if self.core:
@@ -665,6 +673,8 @@ class TradingTUI(App):
         self.no_price = no_price
         self.best_bid = bid
         self.best_ask = ask
+        # Update cards with new prices
+        self._update_cards()
 
     async def on_unmount(self) -> None:
         self._stop_flash_timer()

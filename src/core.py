@@ -667,13 +667,32 @@ class FingerBlasterCore:
             await self.market_manager.set_market(new_market)
             return price_str
         
-        # Could not resolve
-        print("[CORE] Could not resolve dynamic strike, using 'Dynamic'", flush=True)
+        # Could not resolve - use current market price as fallback
+        print("[CORE] Could not resolve dynamic strike, using current market price", flush=True)
+        try:
+            # Try to get current BTC price as fallback
+            current_price = await asyncio.wait_for(
+                self.connector.get_btc_price(),
+                timeout=2.0
+            )
+            if current_price and current_price > 0:
+                strike = f"{current_price:,.2f}"
+                self.log_msg(
+                    f"WARNING: Could not determine dynamic strike at market start ({market_start_time}). "
+                    f"Market started {time_since_start:.0f}s ago. Using current price fallback: ${strike}"
+                )
+                new_market['strike_price'] = strike
+                await self.market_manager.set_market(new_market)
+                return strike
+        except Exception as e:
+            print(f"[CORE] Could not get current price fallback: {e}", flush=True)
+
+        # Last resort - return placeholder
         self.log_msg(
             f"WARNING: Could not determine dynamic strike price at market start ({market_start_time}). "
             f"Market started {time_since_start:.0f}s ago. This may cause incorrect strike calculation."
         )
-        return "Dynamic"
+        return "Pending"
     
     async def _log_current_btc_prices(self) -> None:
         """Log current BTC prices from various sources for comparison."""
@@ -724,24 +743,31 @@ class FingerBlasterCore:
                         print("[CORE] Clearing YES history...", flush=True)
                         await self.history_manager.clear_yes_history()
                         strike = str(new_market.get('strike_price', 'N/A'))
-                        
+
                         # Resolve dynamic strikes
                         print("[CORE] Getting market start time...", flush=True)
                         market_start_time = await self.market_manager.get_market_start_time()
                         if strike == "Dynamic" and market_start_time:
                             print("[CORE] Resolving dynamic strike...", flush=True)
+                            # Set strike to "Loading" while resolving
+                            new_market['strike_price'] = "Loading"
+                            await self.market_manager.set_market(new_market)
+                            # Emit market update to show "Loading"
+                            self._emit('market_update', "Loading", new_market.get('end_date', 'N/A'), new_market.get('question', 'Market'))
+
                             strike = await self._resolve_dynamic_strike(new_market, market_start_time)
-                        
+
                         # Ensure resolved strike is stored in market data for resolution calculation
                         # This is critical - resolution reads from market.get('strike_price')
-                        if strike and strike not in ('N/A', 'None', '', 'Pending'):
+                        if strike and strike not in ('N/A', 'None', ''):
                             new_market['strike_price'] = strike
                             # Update the stored market data
                             await self.market_manager.set_market(new_market)
                             logger.info(f"Strike stored in market data: {strike}")
                         else:
-                            logger.warning(f"Invalid strike after resolution attempt: {strike}")
-                        
+                            # Keep whatever strike we have (could be Loading, Pending, N/A, etc.)
+                            logger.warning(f"Strike resolution incomplete or failed: {strike}")
+
                         self.log_msg(
                             f"Market Found: Strike={strike}, End={new_market.get('end_date', 'N/A')}"
                         )
