@@ -11,7 +11,10 @@
       "Bash(timeout 10 python:*)",
       "Bash(timeout 7 python:*)",
       "Bash(timeout 8 python:*)",
-      "Bash(tee:*)"
+      "Bash(tee:*)",
+      "Bash(timeout 15 python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

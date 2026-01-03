@@ -309,6 +309,9 @@ class TradingTUI(App):
             self.core.register_callback('flatten_failed', self._async_callback_wrapper(self._on_flatten_failed))
             
             await self.core.start_rtds()
+            # Wait for RTDS to collect some price history before looking for markets
+            # This allows Chainlink price data to be available for dynamic strike resolution
+            await asyncio.sleep(2.0)
             await self.core.update_market_status()
             
             # Refresh UI with initial values after mount

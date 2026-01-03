@@ -635,7 +635,7 @@ class FingerBlasterCore:
             print("[CORE] Chainlink API timeout, skipping", flush=True)
         except Exception as e:
             print(f"[CORE] Chainlink API error: {e}", flush=True)
-        
+
         if chainlink_price and chainlink_price > 0:
             strike = f"{chainlink_price:,.2f}"
             self.log_msg(
@@ -644,6 +644,24 @@ class FingerBlasterCore:
             new_market['strike_price'] = strike
             await self.market_manager.set_market(new_market)
             return strike
+
+        # Strategy 2b: Use current Chainlink price from RTDS (same oracle source as Polymarket)
+        print("[CORE] Trying current RTDS Chainlink price...", flush=True)
+        # Wait up to 5 seconds for RTDS to populate price data
+        for attempt in range(10):  # Try up to 10 times (5 seconds total with 0.5s waits)
+            await asyncio.sleep(0.5)
+            current_chainlink = self.rtds_manager.get_chainlink_price()
+            if current_chainlink and current_chainlink > 0:
+                strike = f"{current_chainlink:,.2f}"
+                self.log_msg(
+                    f"Dynamic strike: Using current RTDS Chainlink price (same oracle as Polymarket): ${current_chainlink:,.2f}"
+                )
+                new_market['strike_price'] = strike
+                await self.market_manager.set_market(new_market)
+                print(f"[CORE] Resolved strike to: {strike}", flush=True)
+                return strike
+            print(f"[CORE] Waiting for RTDS price ({attempt+1}/10)...", flush=True)
+        print("[CORE] RTDS price not available after 5s, continuing to fallback", flush=True)
         
         # Strategy 3: Fallback to Binance (with short timeout)
         print("[CORE] Trying Binance fallback with 2s timeout...", flush=True)
