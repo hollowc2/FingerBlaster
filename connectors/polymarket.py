@@ -9,6 +9,7 @@ import hmac
 import hashlib
 import base64
 import urllib.parse
+import asyncio
 from decimal import Decimal, ROUND_DOWN
 from functools import wraps
 from typing import Optional, Dict, List, Any, Tuple, Callable, TypeVar
@@ -17,20 +18,23 @@ T = TypeVar('T')
 
 import pandas as pd
 import requests
+import aiohttp
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dotenv import load_dotenv
-from web3 import Web3
+from web3 import Web3, AsyncWeb3
+from web3.providers import AsyncHTTPProvider
 
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import (
-    TradeParams, MarketOrderArgs, OrderType, 
+    TradeParams, MarketOrderArgs, OrderType,
     BalanceAllowanceParams, AssetType, OrderArgs
 )
 from py_clob_client.order_builder.constants import BUY, SELL
 
 from connectors.base import DataConnector
 from connectors.http_mixin import HttpFetcherMixin
+from connectors.async_http_mixin import AsyncHttpFetcherMixin
 
 load_dotenv()
 
@@ -69,55 +73,55 @@ logger = logging.getLogger("PolymarketConnector")
 
 def validate_order_params(func: Callable[..., T]) -> Callable[..., T]:
     """Decorator to validate order parameters before execution.
-    
+
     Validates token_id, amount/size, and side parameters to prevent
     invalid orders from being submitted to the API.
-    
+
     Args:
         func: The order function to wrap
-        
+
     Returns:
         Wrapped function with input validation
     """
     @wraps(func)
-    def wrapper(self, token_id: str, amount: float, side: str, *args, **kwargs) -> T:
+    async def wrapper(self, token_id: str, amount: float, side: str, *args, **kwargs) -> T:
         # Validate token_id format (should be non-empty string)
         if not token_id or not isinstance(token_id, str):
             logger.error(f"Invalid token_id: {token_id} (type: {type(token_id)})")
             return None
-        
+
         # Token IDs are typically long hex strings
         if len(token_id) < 10:
             logger.error(f"Token ID appears too short: {token_id}")
             return None
-        
+
         # Validate amount
         if not isinstance(amount, (int, float)):
             logger.error(f"Invalid amount type: {type(amount)}")
             return None
-        
+
         if amount <= 0:
             logger.error(f"Invalid amount: {amount} (must be positive)")
             return None
-        
+
         if amount > 1_000_000:  # Sanity check - $1M max order
             logger.error(f"Amount exceeds sanity limit: {amount}")
             return None
-        
+
         # Validate side
         if not isinstance(side, str):
             logger.error(f"Invalid side type: {type(side)}")
             return None
-        
+
         if side.upper() not in ('BUY', 'SELL'):
             logger.error(f"Invalid side: {side} (must be 'BUY' or 'SELL')")
             return None
-        
-        return func(self, token_id, amount, side, *args, **kwargs)
+
+        return await func(self, token_id, amount, side, *args, **kwargs)
     return wrapper
 
 
-class PolymarketConnector(DataConnector, HttpFetcherMixin):
+class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin):
 
     def __init__(self):
         """Initialize the Polymarket connector with proper error handling."""
@@ -127,6 +131,13 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
 
         # Create session with connection pooling and retries (inherited from HttpFetcherMixin)
         self.session = self._create_session(max_retries=NetworkConstants.MAX_RETRIES)
+
+        # Async session (lazy initialization)
+        self.async_session: Optional[aiohttp.ClientSession] = None
+        self._session_initialized = False
+
+        # AsyncWeb3 (lazy initialization)
+        self.async_w3: Optional[AsyncWeb3] = None
 
         # Initialize client
         self._initialize_client()
@@ -324,6 +335,37 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
             logger.info(f"✓ Wallet Balance (API): {balance_info}")
         except Exception as e:
             logger.warning(f"Could not fetch balance via API: {e}")
+
+    async def _ensure_async_session(self):
+        """Lazy initialization of async session."""
+        # Check if session exists and is not closed
+        # RetryClient wraps ClientSession, so we check the underlying session
+        needs_init = (
+            self.async_session is None or
+            (hasattr(self.async_session, 'client_session') and
+             self.async_session.client_session._closed) or
+            (hasattr(self.async_session, '_closed') and
+             self.async_session._closed)
+        )
+        if needs_init:
+            self.async_session = await self._create_async_session(
+                max_retries=NetworkConstants.MAX_RETRIES
+            )
+            self._session_initialized = True
+
+    async def _ensure_async_web3(self):
+        """Lazy initialization of AsyncWeb3."""
+        if self.async_w3 is None:
+            provider = AsyncHTTPProvider(NetworkConstants.POLYGON_RPC_URL)
+            self.async_w3 = AsyncWeb3(provider)
+
+    async def close(self):
+        """Close async session and cleanup resources."""
+        if self.async_session and not self.async_session.closed:
+            await self.async_session.close()
+        if self.async_w3:
+            # AsyncWeb3 providers don't need explicit cleanup in most cases
+            pass
     
     def _safe_parse_json_list(self, json_str: str) -> List[str]:
         """
@@ -610,75 +652,84 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
         
         return result
     
-    def get_token_balance(self, token_id: str) -> float:
+    async def get_token_balance(self, token_id: str) -> float:
         """
-        Get the balance of a specific outcome token.
-        
+        Get the balance of a specific outcome token (async wrapper).
+
+        Note: Uses to_thread() internally since py-clob-client is synchronous.
+
         Args:
             token_id: Token ID to check balance for
-            
+
         Returns:
             Balance in shares (float)
         """
-        try:
-            b_params = BalanceAllowanceParams(
-                token_id=token_id,
-                asset_type=AssetType.CONDITIONAL,
-                signature_type=self.signature_type
-            )
-            balance_info = self.client.get_balance_allowance(b_params)
-            raw_balance = int(balance_info.get('balance', 0))
-            return raw_balance / (10 ** TradingConstants.CONDITIONAL_TOKEN_DECIMALS)
-        except Exception as e:
-            logger.error(f"Error fetching token balance for {token_id}: {e}")
-            return 0.0
+        def _sync_get_balance():
+            try:
+                b_params = BalanceAllowanceParams(
+                    token_id=token_id,
+                    asset_type=AssetType.CONDITIONAL,
+                    signature_type=self.signature_type
+                )
+                balance_info = self.client.get_balance_allowance(b_params)
+                raw_balance = int(balance_info.get('balance', 0))
+                return raw_balance / (10 ** TradingConstants.CONDITIONAL_TOKEN_DECIMALS)
+            except Exception as e:
+                logger.error(f"Error fetching token balance for {token_id}: {e}")
+                return 0.0
+
+        return await asyncio.to_thread(_sync_get_balance)
     
-    def flatten_market(self, token_map: Dict[str, str]) -> List[Any]:
+    async def flatten_market(self, token_map: Dict[str, str]) -> List[Any]:
         """
-        Close all positions in the given token map (YES and NO).
-        
+        Close all positions in the given token map (YES and NO) (async wrapper).
+
+        Note: Uses async methods but some underlying operations use to_thread().
+
         Args:
             token_map: Dictionary mapping 'YES'/'NO' to token IDs
-            
+
         Returns:
             List of order responses
         """
         results = []
         for outcome, token_id in token_map.items():
             logger.info(f"Checking balance for {outcome} ({token_id[:10]}...)")
-            balance = self.get_token_balance(token_id)
-            
+            balance = await self.get_token_balance(token_id)
+
             if balance > TradingConstants.MIN_BALANCE_THRESHOLD:
                 logger.info(f"Found {balance} shares of {outcome}. Flattening...")
-                resp = self.create_market_order(token_id, balance, 'SELL')
+                resp = await self.create_market_order(token_id, balance, 'SELL')
                 results.append(resp)
             else:
                 logger.info(f"No significant balance for {outcome}.")
-        
+
         return results
     
-    def get_usdc_balance(self) -> float:
+    async def get_usdc_balance(self) -> float:
         """
-        Get USDC balance from wallet.
-        
-        Tries Web3 direct blockchain query first, falls back to CLOB API.
-        
+        Get USDC balance from wallet (async).
+
+        Tries AsyncWeb3 direct blockchain query first, falls back to CLOB API.
+
         Returns:
             USDC balance (float)
         """
-        # Try Web3 first (most reliable)
+        # Try AsyncWeb3 first (most reliable)
         try:
-            w3 = Web3(Web3.HTTPProvider(NetworkConstants.POLYGON_RPC_URL))
+            await self._ensure_async_web3()
             key = os.getenv("PRIVATE_KEY")
             env_address = os.getenv("WALLET_ADDRESS")
-            
+
             target_address = None
             if env_address:
                 target_address = env_address
             elif key:
-                account = w3.eth.account.from_key(key)
+                # For getting address from key, we can still use sync Web3
+                w3_sync = Web3()
+                account = w3_sync.eth.account.from_key(key)
                 target_address = account.address
-            
+
             if target_address:
                 usdc_abi = [{
                     "constant": True,
@@ -689,24 +740,27 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
                     "stateMutability": "view",
                     "type": "function"
                 }]
-                
-                contract = w3.eth.contract(
+
+                contract = self.async_w3.eth.contract(
                     address=NetworkConstants.USDC_CONTRACT_ADDRESS,
                     abi=usdc_abi
                 )
-                
+
                 target_address = Web3.to_checksum_address(target_address)
-                balance_wei = contract.functions.balanceOf(target_address).call()
+                balance_wei = await contract.functions.balanceOf(target_address).call()
                 return balance_wei / (10 ** TradingConstants.USDC_DECIMALS)
         except Exception as e:
-            logger.debug(f"Web3 balance check failed: {e}")
-        
-        # Fallback to CLOB API
+            logger.debug(f"AsyncWeb3 balance check failed: {e}")
+
+        # Fallback to CLOB API (wrapped in to_thread)
         try:
-            balance_info = self.client.get_balance_allowance()
-            return float(balance_info.get('balance', 0))
+            def _get_clob_balance():
+                balance_info = self.client.get_balance_allowance()
+                return float(balance_info.get('balance', 0))
+
+            return await asyncio.to_thread(_get_clob_balance)
         except Exception as e:
-            logger.error(f"Both Web3 and CLOB API balance checks failed: {e}")
+            logger.error(f"Both AsyncWeb3 and CLOB API balance checks failed: {e}")
             return 0.0
     
     def fetch_data(
@@ -760,9 +814,9 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
             logger.error(f"Error fetching order book: {e}")
             return None
     
-    def get_market_data(self, market_id: str) -> Optional[Dict[str, Any]]:
+    async def get_market_data(self, market_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get market data from Gamma API.
+        Get market data from Gamma API (async).
 
         Args:
             market_id: Market ID or slug
@@ -770,13 +824,14 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
         Returns:
             Market data dictionary or None
         """
+        await self._ensure_async_session()
         try:
             if "-" in market_id and not market_id.isdigit():
                 url = f"{self.gamma_url}/events?slug={market_id}"
             else:
                 url = f"{self.gamma_url}/markets/{market_id}"
 
-            data = self._get_json(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
+            data = await self._get_json_async(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
             if data and isinstance(data, list) and len(data) > 0:
                 return data[0]
             return data
@@ -784,9 +839,9 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
             logger.error(f"Unexpected error fetching market data: {e}")
             return None
     
-    def get_active_market(self, series_id: str = "10192") -> Optional[Dict[str, Any]]:
+    async def get_active_market(self, series_id: str = "10192") -> Optional[Dict[str, Any]]:
         """
-        Fetch the currently active market for a given series ID.
+        Fetch the currently active market for a given series ID (async).
 
         Args:
             series_id: Series ID (default: "10192" for BTC Up or Down 15m)
@@ -794,37 +849,38 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
         Returns:
             Market data dictionary or None
         """
+        await self._ensure_async_session()
         try:
             url = f"{self.gamma_url}/events?limit=100&closed=false&series_id={series_id}"
-            events = self._get_json(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
+            events = await self._get_json_async(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
             if not events:
                 logger.info(f"No active events found for series ID: {series_id}")
                 return None
-            
+
             # Filter valid future events
             now = pd.Timestamp.now(tz='UTC')
             valid_events = [
                 e for e in events
                 if pd.Timestamp(e['endDate']) > now
             ]
-            
+
             if not valid_events:
                 logger.info("No valid future events found.")
                 return None
-            
+
             # Sort by end date and get the soonest one
             valid_events.sort(key=lambda x: pd.Timestamp(x['endDate']))
             target_event = valid_events[0]
-            
+
             # Try to get more detailed market data that might have the actual strike
             market_data = self._parse_market_data(target_event, include_token_map=True)
-            
+
             # If we have a market_id, try to fetch detailed market info
             # Also check if there's a resolution endpoint that has the strike
             if market_data and market_data.get('market_id'):
                 try:
                     # Try the market details endpoint
-                    detailed_market = self.get_market_data(market_data['market_id'])
+                    detailed_market = await self.get_market_data(market_data['market_id'])
                     if detailed_market:
                         # Check if detailed market has better strike info
                         if isinstance(detailed_market, dict):
@@ -841,7 +897,7 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
                                             return market_data
                                     except (ValueError, TypeError):
                                         pass
-                            
+
                             detailed_strike = self._extract_strike_price(
                                 detailed_market.get('markets', [{}])[0] if detailed_market.get('markets') else detailed_market,
                                 detailed_market if 'endDate' in detailed_market else target_event
@@ -849,97 +905,103 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
                             if detailed_strike and detailed_strike != "N/A":
                                 logger.info(f"Found strike from detailed market data: {detailed_strike}")
                                 market_data['strike_price'] = detailed_strike
-                    
+
                     # Also try querying the market's resolution endpoint if it exists
                     # Some markets might expose the strike via a resolution query
                     try:
                         resolution_url = f"{self.gamma_url}/markets/{market_data['market_id']}/resolution"
-                        resolution_response = self.session.get(
-                            resolution_url, timeout=NetworkConstants.REQUEST_TIMEOUT
-                        )
-                        if resolution_response.status_code == 200:
-                            resolution_data = resolution_response.json()
-                            # Check if resolution data contains strike
-                            strike = (resolution_data.get('strike') or 
-                                    resolution_data.get('threshold') or
-                                    resolution_data.get('price'))
-                            if strike:
-                                logger.info(f"Found strike from resolution endpoint: {strike}")
-                                market_data['strike_price'] = str(strike)
+                        async with self.async_session.get(
+                            resolution_url, timeout=aiohttp.ClientTimeout(total=NetworkConstants.REQUEST_TIMEOUT)
+                        ) as resolution_response:
+                            if resolution_response.status == 200:
+                                resolution_data = await resolution_response.json()
+                                # Check if resolution data contains strike
+                                strike = (resolution_data.get('strike') or
+                                        resolution_data.get('threshold') or
+                                        resolution_data.get('price'))
+                                if strike:
+                                    logger.info(f"Found strike from resolution endpoint: {strike}")
+                                    market_data['strike_price'] = str(strike)
                     except Exception as e:
                         logger.debug(f"Resolution endpoint check failed (may not exist): {e}")
-                        
+
                 except Exception as e:
                     logger.debug(f"Could not fetch detailed market data: {e}")
-            
+
             return market_data
-            
-        except requests.RequestException as e:
+
+        except aiohttp.ClientError as e:
             logger.error(f"Error fetching active market: {e}")
             return None
         except Exception as e:
             logger.error(f"Unexpected error in get_active_market: {e}", exc_info=True)
             return None
     
-    def get_next_market(
+    async def get_next_market(
         self, current_end_date_str: str, series_id: str = "10192"
     ) -> Optional[Dict[str, Any]]:
         """
-        Fetch the next market that ends AFTER the provided current_end_date.
-        
+        Fetch the next market that ends AFTER the provided current_end_date (async).
+
         Args:
             current_end_date_str: Current market end date string
             series_id: Series ID (default: "10192")
-            
+
         Returns:
             Market data dictionary or None
         """
+        await self._ensure_async_session()
         try:
             url = f"{self.gamma_url}/events?limit=100&closed=false&series_id={series_id}"
-            response = self.session.get(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
-            response.raise_for_status()
-            
-            events = response.json()
+            async with self.async_session.get(
+                url, timeout=aiohttp.ClientTimeout(total=NetworkConstants.REQUEST_TIMEOUT)
+            ) as response:
+                response.raise_for_status()
+                events = await response.json()
+
             if not events:
                 return None
-            
+
             current_end = pd.Timestamp(current_end_date_str)
             if current_end.tz is None:
                 current_end = current_end.tz_localize('UTC')
-            
+
             # Filter events that end after current
             valid_events = [
                 e for e in events
                 if pd.Timestamp(e['endDate']) > current_end
             ]
-            
+
             if not valid_events:
                 return None
-            
+
             # Sort by end date and get the soonest one
             valid_events.sort(key=lambda x: pd.Timestamp(x['endDate']))
             target_event = valid_events[0]
-            
+
             return self._parse_market_data(target_event, include_token_map=False)
-            
-        except requests.RequestException as e:
+
+        except aiohttp.ClientError as e:
             logger.error(f"Error fetching next market: {e}")
             return None
         except Exception as e:
             logger.error(f"Unexpected error in get_next_market: {e}", exc_info=True)
             return None
     
-    def get_btc_price(self) -> float:
+    async def get_btc_price(self) -> float:
         """
-        Fetch current BTC price from Binance API.
+        Fetch current BTC price from Binance API (async).
 
         Returns:
             BTC price in USDT (float)
         """
+        await self._ensure_async_session()
         try:
             url = f"{NetworkConstants.BINANCE_API_URL}/ticker/price"
             params = {'symbol': 'BTCUSDT'}
-            data = self._get_json(url, params=params, timeout=NetworkConstants.REQUEST_TIMEOUT)
+            data = await self._get_json_async(
+                url, params=params, timeout=NetworkConstants.REQUEST_TIMEOUT
+            )
             if data:
                 return float(data['price'])
             return 0.0
@@ -947,66 +1009,67 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
             logger.error(f"Error parsing BTC price from Binance: {e}")
             return 0.0
     
-    def get_chainlink_price_at(self, timestamp: pd.Timestamp) -> Optional[float]:
+    async def get_chainlink_price_at(self, timestamp: pd.Timestamp) -> Optional[float]:
         """
-        Fetch Chainlink BTC/USD price at a specific timestamp.
-        
+        Fetch Chainlink BTC/USD price at a specific timestamp (async).
+
         Uses Chainlink Data Streams API to get historical prices.
         Based on: https://data.chain.link/streams/btc-usd
-        
+
         Args:
             timestamp: Timestamp to fetch price for
-            
+
         Returns:
             Chainlink BTC/USD price as float or None if unavailable
         """
+        await self._ensure_async_session()
         try:
             # Chainlink Data Streams API for BTC/USD
             # The stream ID for BTC/USD is typically available via their streams API
             # Try multiple approaches to get the price
-            
+
             # Approach 1: Query the streams endpoint for BTC/USD
             streams_url = "https://data.chain.link/v1/streams"
             try:
-                streams_response = self.session.get(
-                    streams_url, timeout=NetworkConstants.REQUEST_TIMEOUT
-                )
-                if streams_response.status_code == 200:
-                    streams_data = streams_response.json()
-                    # Find BTC/USD stream
-                    btc_stream = None
-                    if isinstance(streams_data, list):
-                        btc_stream = next(
-                            (s for s in streams_data if 'btc' in str(s.get('id', '')).lower() and 'usd' in str(s.get('id', '')).lower()),
-                            None
-                        )
-                    
-                    if btc_stream:
-                        stream_id = btc_stream.get('id')
-                        # Query historical data for this stream
-                        timestamp_ms = int(timestamp.timestamp() * 1000)
-                        data_url = f"https://data.chain.link/v1/streams/{stream_id}/data"
-                        params = {
-                            'timestamp': timestamp_ms,
-                            'limit': 1
-                        }
-                        data_response = self.session.get(
-                            data_url, params=params, timeout=NetworkConstants.REQUEST_TIMEOUT
-                        )
-                        if data_response.status_code == 200:
-                            data = data_response.json()
-                            if isinstance(data, dict) and 'data' in data:
-                                price = data['data'].get('price') or data['data'].get('value')
-                                if price:
-                                    logger.info(f"Found Chainlink price from streams API: {price}")
-                                    return float(price)
+                async with self.async_session.get(
+                    streams_url, timeout=aiohttp.ClientTimeout(total=NetworkConstants.REQUEST_TIMEOUT)
+                ) as streams_response:
+                    if streams_response.status == 200:
+                        streams_data = await streams_response.json()
+                        # Find BTC/USD stream
+                        btc_stream = None
+                        if isinstance(streams_data, list):
+                            btc_stream = next(
+                                (s for s in streams_data if 'btc' in str(s.get('id', '')).lower() and 'usd' in str(s.get('id', '')).lower()),
+                                None
+                            )
+
+                        if btc_stream:
+                            stream_id = btc_stream.get('id')
+                            # Query historical data for this stream
+                            timestamp_ms = int(timestamp.timestamp() * 1000)
+                            data_url = f"https://data.chain.link/v1/streams/{stream_id}/data"
+                            params = {
+                                'timestamp': timestamp_ms,
+                                'limit': 1
+                            }
+                            async with self.async_session.get(
+                                data_url, params=params, timeout=aiohttp.ClientTimeout(total=NetworkConstants.REQUEST_TIMEOUT)
+                            ) as data_response:
+                                if data_response.status == 200:
+                                    data = await data_response.json()
+                                    if isinstance(data, dict) and 'data' in data:
+                                        price = data['data'].get('price') or data['data'].get('value')
+                                        if price:
+                                            logger.info(f"Found Chainlink price from streams API: {price}")
+                                            return float(price)
             except Exception as e:
                 logger.debug(f"Streams API approach failed: {e}")
-            
+
             # Approach 2: Direct query to BTC/USD feed (if we know the feed address)
             # Chainlink BTC/USD feed on Polygon: 0x34bB4e028b3d2Be6B97F6e75e68492b891C5fF15
             # But we need to query via their API, not directly
-            
+
             # Approach 3: Try the data.chain.link query endpoint
             timestamp_ms = int(timestamp.timestamp() * 1000)
             query_url = "https://data.chain.link/v1/queries"
@@ -1017,42 +1080,42 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
                 {'symbol': 'btc/usd', 'timestamp': timestamp_ms},
             ]:
                 try:
-                    query_response = self.session.get(
-                        query_url, params=param_format, timeout=NetworkConstants.REQUEST_TIMEOUT
-                    )
-                    if query_response.status_code == 200:
-                        query_data = query_response.json()
-                        # Try various response formats
-                        price = None
-                        if isinstance(query_data, dict):
-                            price = (query_data.get('price') or 
-                                   query_data.get('value') or
-                                   query_data.get('data', {}).get('price') or
-                                   query_data.get('data', {}).get('value'))
-                        elif isinstance(query_data, list) and len(query_data) > 0:
-                            price = (query_data[0].get('price') or 
-                                   query_data[0].get('value'))
-                        
-                        if price:
-                            logger.info(f"Found Chainlink price from query API: {price}")
-                            return float(price)
+                    async with self.async_session.get(
+                        query_url, params=param_format, timeout=aiohttp.ClientTimeout(total=NetworkConstants.REQUEST_TIMEOUT)
+                    ) as query_response:
+                        if query_response.status == 200:
+                            query_data = await query_response.json()
+                            # Try various response formats
+                            price = None
+                            if isinstance(query_data, dict):
+                                price = (query_data.get('price') or
+                                       query_data.get('value') or
+                                       query_data.get('data', {}).get('price') or
+                                       query_data.get('data', {}).get('value'))
+                            elif isinstance(query_data, list) and len(query_data) > 0:
+                                price = (query_data[0].get('price') or
+                                       query_data[0].get('value'))
+
+                            if price:
+                                logger.info(f"Found Chainlink price from query API: {price}")
+                                return float(price)
                 except Exception as e:
                     logger.debug(f"Query format {param_format} failed: {e}")
                     continue
-            
+
             logger.debug(f"All Chainlink API approaches failed for timestamp {timestamp}")
             return None
-            
-        except requests.RequestException as e:
+
+        except aiohttp.ClientError as e:
             logger.debug(f"Error fetching Chainlink historical price: {e}")
             return None
         except (KeyError, ValueError, TypeError) as e:
             logger.debug(f"Error parsing Chainlink price: {e}")
             return None
     
-    def get_market_resolution(self, market_id: str) -> Optional[Dict[str, Any]]:
+    async def get_market_resolution(self, market_id: str) -> Optional[Dict[str, Any]]:
         """
-        Query Polymarket API for actual market resolution details.
+        Query Polymarket API for actual market resolution details (async).
 
         Args:
             market_id: Market ID to query
@@ -1060,10 +1123,11 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
         Returns:
             Resolution data including outcome, price used, etc.
         """
+        await self._ensure_async_session()
         try:
             # Try the market endpoint to get resolution info
             url = f"{self.gamma_url}/markets/{market_id}"
-            data = self._get_json(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
+            data = await self._get_json_async(url, timeout=NetworkConstants.REQUEST_TIMEOUT)
 
             if not data:
                 return None
@@ -1089,9 +1153,9 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
             logger.debug(f"Error parsing market resolution: {e}")
             return None
     
-    def get_btc_price_at(self, timestamp: pd.Timestamp) -> str:
+    async def get_btc_price_at(self, timestamp: pd.Timestamp) -> str:
         """
-        Fetch BTC price at a specific timestamp from Binance.
+        Fetch BTC price at a specific timestamp from Binance (async).
 
         Args:
             timestamp: Timestamp to fetch price for
@@ -1099,6 +1163,7 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
         Returns:
             BTC price as string or "N/A" if unavailable
         """
+        await self._ensure_async_session()
         try:
             url = f"{NetworkConstants.BINANCE_API_URL}/klines"
 
@@ -1113,7 +1178,9 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
                 'limit': 1
             }
 
-            data = self._get_json(url, params=params, timeout=NetworkConstants.REQUEST_TIMEOUT)
+            data = await self._get_json_async(
+                url, params=params, timeout=NetworkConstants.REQUEST_TIMEOUT
+            )
             if data and len(data) > 0:
                 return str(float(data[0][1]))  # Open price
 
@@ -1162,51 +1229,54 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
             "Poly-Signature": signature_b64
         }
     
-    def get_candles(
+    async def get_candles(
         self, token_id: str, interval: str = "1m",
         start_time: int = None, end_time: int = None, fidelity: int = None
     ) -> List[Dict[str, Any]]:
         """
-        Fetch candles from CLOB API.
-        
+        Fetch candles from CLOB API (async).
+
         Args:
             token_id: Token ID
             interval: Candle interval
             start_time: Start timestamp (optional)
             end_time: End timestamp (optional)
             fidelity: Fidelity parameter (optional)
-            
+
         Returns:
             List of candle data dictionaries
         """
+        await self._ensure_async_session()
         try:
             path = "/prices-history"
             params = {"market": token_id, "interval": interval}
-            
+
             if start_time:
                 params['startTs'] = start_time
             if end_time:
                 params['endTs'] = end_time
             if fidelity:
                 params['fidelity'] = fidelity
-            
+
             query_string = urllib.parse.urlencode(params)
             full_path = f"{path}?{query_string}"
-            
+
             headers = {}
             if self.client and hasattr(self.client, 'creds') and self.client.creds:
                 try:
                     headers = self._generate_headers("GET", full_path)
                 except Exception as e:
                     logger.warning(f"Error generating auth headers: {e}")
-            
+
             url = f"{NetworkConstants.CLOB_HOST}{path}"
-            response = self.session.get(url, params=params, headers=headers)
-            response.raise_for_status()
-            
-            data = response.json()
-            return data.get('history', [])
-        except requests.RequestException as e:
+            async with self.async_session.get(
+                url, params=params, headers=headers,
+                timeout=aiohttp.ClientTimeout(total=NetworkConstants.REQUEST_TIMEOUT)
+            ) as response:
+                response.raise_for_status()
+                data = await response.json()
+                return data.get('history', [])
+        except aiohttp.ClientError as e:
             logger.error(f"Error fetching candles: {e}")
             return []
         except Exception as e:
@@ -1307,79 +1377,84 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
             return None
     
     @validate_order_params
-    def create_market_order(
+    async def create_market_order(
         self, token_id: str, amount: float, side: str
     ) -> Optional[Dict[str, Any]]:
         """
-        Create and post a market order.
-        
+        Create and post a market order (async wrapper).
+
+        Note: Uses to_thread() internally since py-clob-client is synchronous.
+
         Args:
             token_id: Asset ID to trade
             amount: For BUY: USDC amount. For SELL: Shares amount.
             side: 'BUY' or 'SELL'
-            
+
         Returns:
             Order response dictionary or None
-            
+
         Note:
             Input validation is handled by the @validate_order_params decorator.
         """
-        try:
-            # Clean and validate amount
-            clean_amount = float(
-                Decimal(str(amount)).quantize(
-                    Decimal("0.01"), rounding=ROUND_DOWN
+        def _sync_create_order():
+            try:
+                # Clean and validate amount
+                clean_amount = float(
+                    Decimal(str(amount)).quantize(
+                        Decimal("0.01"), rounding=ROUND_DOWN
+                    )
                 )
-            )
-            
-            logger.info(f"Creating market {side} order: {clean_amount} for {token_id[:20]}...")
-            
-            # Check credentials
-            if not hasattr(self.client, 'creds') or not self.client.creds:
-                error_msg = "ERROR: Client does not have API credentials set!"
-                logger.error(error_msg)
+
+                logger.info(f"Creating market {side} order: {clean_amount} for {token_id[:20]}...")
+
+                # Check credentials
+                if not hasattr(self.client, 'creds') or not self.client.creds:
+                    error_msg = "ERROR: Client does not have API credentials set!"
+                    logger.error(error_msg)
+                    return None
+
+                # Get order book for price discovery
+                ob = self.get_order_book(token_id)
+                if not ob:
+                    error_msg = "ERROR: Could not fetch order book"
+                    logger.error(error_msg)
+                    return None
+
+                # Calculate aggressive price
+                price = self._calculate_aggressive_price(ob, side.upper())
+                logger.info(f"Aggressive {side} price: {price}")
+
+                # Create market order
+                market_args = MarketOrderArgs(
+                    token_id=token_id,
+                    amount=clean_amount,
+                    side=side.upper(),
+                    price=price,
+                    order_type=OrderType.FOK
+                )
+
+                logger.info("Building and signing market order...")
+                signed_order = self.client.create_market_order(market_args)
+                logger.info("✓ Order signed successfully")
+
+                logger.info("Posting order to CLOB...")
+                resp = self.client.post_order(signed_order, OrderType.FOK)
+                logger.info(f"Order Response: {resp}")
+
+                return resp
+
+            except Exception as e:
+                error_msg = f"EXCEPTION in create_market_order: {e}"
+                logger.error(error_msg, exc_info=True)
+
+                if hasattr(e, 'status_code'):
+                    logger.error(f"Status: {e.status_code}")
+                if hasattr(e, 'error_message'):
+                    logger.error(f"Error Message: {e.error_message}")
+
                 return None
-            
-            # Get order book for price discovery
-            ob = self.get_order_book(token_id)
-            if not ob:
-                error_msg = "ERROR: Could not fetch order book"
-                logger.error(error_msg)
-                return None
-            
-            # Calculate aggressive price
-            price = self._calculate_aggressive_price(ob, side.upper())
-            logger.info(f"Aggressive {side} price: {price}")
-            
-            # Create market order
-            market_args = MarketOrderArgs(
-                token_id=token_id,
-                amount=clean_amount,
-                side=side.upper(),
-                price=price,
-                order_type=OrderType.FOK
-            )
-            
-            logger.info("Building and signing market order...")
-            signed_order = self.client.create_market_order(market_args)
-            logger.info("✓ Order signed successfully")
-            
-            logger.info("Posting order to CLOB...")
-            resp = self.client.post_order(signed_order, OrderType.FOK)
-            logger.info(f"Order Response: {resp}")
-            
-            return resp
-            
-        except Exception as e:
-            error_msg = f"EXCEPTION in create_market_order: {e}"
-            logger.error(error_msg, exc_info=True)
-            
-            if hasattr(e, 'status_code'):
-                logger.error(f"Status: {e.status_code}")
-            if hasattr(e, 'error_message'):
-                logger.error(f"Error Message: {e.error_message}")
-            
-            return None
+
+        return await asyncio.to_thread(_sync_create_order)
     
     def _calculate_aggressive_price(self, order_book, side: str) -> float:
         """
@@ -1438,21 +1513,26 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
             logger.error(f"Error cancelling order: {e}")
             return None
     
-    def cancel_all_orders(self) -> Optional[Dict[str, Any]]:
+    async def cancel_all_orders(self) -> Optional[Dict[str, Any]]:
         """
-        Cancel all open orders.
-        
+        Cancel all open orders (async wrapper).
+
+        Note: Uses to_thread() internally since py-clob-client is synchronous.
+
         Returns:
             Cancel response dictionary or None
         """
-        try:
-            logger.info("Cancelling ALL orders...")
-            resp = self.client.cancel_all()
-            logger.info(f"Cancel All Response: {resp}")
-            return resp
-        except Exception as e:
-            logger.error(f"Error cancelling all orders: {e}")
-            return None
+        def _sync_cancel_all():
+            try:
+                logger.info("Cancelling ALL orders...")
+                resp = self.client.cancel_all()
+                logger.info(f"Cancel All Response: {resp}")
+                return resp
+            except Exception as e:
+                logger.error(f"Error cancelling all orders: {e}")
+                return None
+
+        return await asyncio.to_thread(_sync_cancel_all)
     
     def get_order_status(self, order_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -1474,27 +1554,28 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
             logger.error(f"Error getting order status: {e}")
             return None
     
-    def get_closed_markets(
-        self, 
-        series_id: str = "10192", 
+    async def get_closed_markets(
+        self,
+        series_id: str = "10192",
         limit: int = 20,
         ascending: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        Fetch closed (resolved) markets from Gamma API.
-        
+        Fetch closed (resolved) markets from Gamma API (async).
+
         This returns historical market results to determine prior outcomes.
-        The markets are filtered by series_id (15-minute BTC markets) and 
+        The markets are filtered by series_id (15-minute BTC markets) and
         sorted by most recent first by default.
-        
+
         Args:
             series_id: Series ID (default: "10192" for BTC Up or Down 15m)
             limit: Maximum number of results to return (default: 20)
             ascending: If False, returns most recent first (default: False)
-            
+
         Returns:
             List of closed market data dictionaries with outcome information
         """
+        await self._ensure_async_session()
         try:
             # Try /events endpoint first (better structure with markets nested in events)
             events_url = f"{self.gamma_url}/events"
@@ -1505,17 +1586,16 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
                 'order': 'endDate',
                 'ascending': 'false',  # Most recent first
             }
-            
+
             logger.debug(f"Querying {events_url} with params: {events_params}")
-            
-            events_response = self.session.get(
+
+            async with self.async_session.get(
                 events_url,
                 params=events_params,
-                timeout=NetworkConstants.REQUEST_TIMEOUT
-            )
-            events_response.raise_for_status()
-            
-            events_data = events_response.json()
+                timeout=aiohttp.ClientTimeout(total=NetworkConstants.REQUEST_TIMEOUT)
+            ) as events_response:
+                events_response.raise_for_status()
+                events_data = await events_response.json()
             
             # Extract markets from events and attach event data to each market
             markets = []
@@ -1534,7 +1614,7 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
             # Fallback to /markets endpoint if events didn't work
             if not markets or not isinstance(markets, list) or len(markets) == 0:
                 logger.info(f"/events endpoint returned no markets, trying /markets endpoint...")
-                
+
                 url = f"{self.gamma_url}/markets"
                 params = {
                     'closed': 'true',
@@ -1542,17 +1622,16 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
                     'ascending': str(ascending).lower(),
                     'series_id': series_id
                 }
-                
+
                 logger.debug(f"Querying {url} with params: {params}")
-                
-                response = self.session.get(
-                    url, 
-                    params=params, 
-                    timeout=NetworkConstants.REQUEST_TIMEOUT
-                )
-                response.raise_for_status()
-                
-                data = response.json()
+
+                async with self.async_session.get(
+                    url,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=NetworkConstants.REQUEST_TIMEOUT)
+                ) as response:
+                    response.raise_for_status()
+                    data = await response.json()
                 
                 # Handle different response formats
                 if isinstance(data, list):
@@ -1603,8 +1682,8 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin):
                 logger.debug(f"Most recent closed market ended at: {first_end}")
             
             return parsed_markets
-            
-        except requests.RequestException as e:
+
+        except aiohttp.ClientError as e:
             logger.error(f"Error fetching closed markets: {e}")
             return []
         except Exception as e:

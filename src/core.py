@@ -627,7 +627,7 @@ class FingerBlasterCore:
         chainlink_price = None
         try:
             chainlink_price = await asyncio.wait_for(
-                asyncio.to_thread(self.connector.get_chainlink_price_at, market_start_time),
+                self.connector.get_chainlink_price_at(market_start_time),
                 timeout=2.0
             )
             print(f"[CORE] Chainlink API returned: {chainlink_price}", flush=True)
@@ -650,7 +650,7 @@ class FingerBlasterCore:
         price_str = None
         try:
             price_str = await asyncio.wait_for(
-                asyncio.to_thread(self.connector.get_btc_price_at, market_start_time),
+                self.connector.get_btc_price_at(market_start_time),
                 timeout=2.0
             )
             print(f"[CORE] Binance fallback returned: {price_str}", flush=True)
@@ -687,7 +687,7 @@ class FingerBlasterCore:
         if not rtds_price:
             try:
                 binance_price = await asyncio.wait_for(
-                    asyncio.to_thread(self.connector.get_btc_price),
+                    self.connector.get_btc_price(),
                     timeout=5.0
                 )
                 if binance_price:
@@ -709,7 +709,7 @@ class FingerBlasterCore:
                 print("[CORE] Searching for new market...", flush=True)
                 try:
                     new_market = await asyncio.wait_for(
-                        asyncio.to_thread(self.connector.get_active_market),
+                        self.connector.get_active_market(),
                         timeout=10.0
                     )
                 except asyncio.TimeoutError:
@@ -807,7 +807,7 @@ class FingerBlasterCore:
             logger.debug("RTDS price not available, falling back to Binance API")
             try:
                 price = await asyncio.wait_for(
-                    asyncio.to_thread(self.connector.get_btc_price),
+                    self.connector.get_btc_price(),
                     timeout=5.0
                 )
             except asyncio.TimeoutError:
@@ -1015,7 +1015,7 @@ class FingerBlasterCore:
     async def fetch_cex_price(self) -> None:
         """Fetch CEX price for oracle lag comparison."""
         try:
-            price = await asyncio.to_thread(self.connector.get_btc_price)
+            price = await self.connector.get_btc_price()
             if price and isinstance(price, (int, float)) and price > 0:
                 self._cex_btc_price = float(price)
                 self._cex_btc_timestamp = time.time()
@@ -1154,9 +1154,7 @@ class FingerBlasterCore:
             polymarket_resolution = None
             if market_id:
                 try:
-                    pm_result = await asyncio.to_thread(
-                        self.connector.get_market_resolution, market_id
-                    )
+                    pm_result = await self.connector.get_market_resolution(market_id)
                     if pm_result and pm_result.get('resolved'):
                         polymarket_resolution = pm_result.get('resolution') or pm_result.get('winner')
                         pm_strike = pm_result.get('strike')
@@ -1437,8 +1435,7 @@ class FingerBlasterCore:
         # Fetch fresh data from API
         try:
             closed_markets = await asyncio.wait_for(
-                asyncio.to_thread(
-                    self.connector.get_closed_markets,
+                self.connector.get_closed_markets(
                     "10192",  # series_id: BTC 15m series
                     20,  # limit: Get last 20 markets
                     False  # ascending: Most recent first
@@ -1750,18 +1747,14 @@ class FingerBlasterCore:
         
         try:
             # Get current balance
-            balance = await asyncio.to_thread(
-                self.connector.get_token_balance, token_id
-            )
-            
+            balance = await self.connector.get_token_balance(token_id)
+
             if balance <= 0.1:  # MIN_BALANCE_THRESHOLD
                 self.log_msg(f"No {side} position to close (balance: {balance:.2f})")
                 return
-            
+
             # Create SELL order to close position
-            resp = await asyncio.to_thread(
-                self.connector.create_market_order, token_id, balance, 'SELL'
-            )
+            resp = await self.connector.create_market_order(token_id, balance, 'SELL')
             
             if resp and resp.get('orderID'):
                 order_id = resp.get('orderID', '')

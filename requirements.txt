@@ -14,4 +14,6 @@ uvicorn[standard]
 pydantic
 slowapi
 python-multipart
+aiohttp>=3.9.0
+aiohttp-retry>=2.8.3
 
