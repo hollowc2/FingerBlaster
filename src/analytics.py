@@ -384,41 +384,66 @@ class AnalyticsEngine:
     # LIQUIDITY ANALYSIS
     # =========================================================================
     
+    def _is_order_book_empty(self, order_book: Dict[str, Dict[str, Dict[float, float]]]) -> bool:
+        """Check if order book has no data.
+
+        Args:
+            order_book: Raw order book data {YES/NO: {bids/asks: {price: size}}}
+
+        Returns:
+            True if order book is completely empty (no bids/asks for either side)
+        """
+        for side in ['YES', 'NO']:
+            if side in order_book:
+                bids = order_book[side].get('bids', {})
+                asks = order_book[side].get('asks', {})
+                if bids or asks:
+                    return False
+        return True
+
     def calculate_liquidity_depth(
         self,
         order_book: Dict[str, Dict[str, Dict[float, float]]]
-    ) -> Dict[str, Dict[str, float]]:
+    ) -> Dict[str, Dict[str, Optional[float]]]:
         """Calculate liquidity depth at top of book.
-        
+
         Args:
             order_book: Raw order book data {YES/NO: {bids/asks: {price: size}}}
-            
+
         Returns:
             Dictionary with depth in dollars at top of book for each side
+            Returns None for depth if order book is not yet populated
         """
+        # Check if order book is empty (WebSocket not yet connected)
+        if self._is_order_book_empty(order_book):
+            return {
+                'YES': {'bid_depth': None, 'ask_depth': None},
+                'NO': {'bid_depth': None, 'ask_depth': None}
+            }
+
         result = {
             'YES': {'bid_depth': 0.0, 'ask_depth': 0.0},
             'NO': {'bid_depth': 0.0, 'ask_depth': 0.0}
         }
-        
+
         for side in ['YES', 'NO']:
             if side not in order_book:
                 continue
-            
+
             # Best bid depth (highest price)
             bids = order_book[side].get('bids', {})
             if bids:
                 best_bid_price = max(bids.keys())
                 best_bid_size = bids[best_bid_price]
                 result[side]['bid_depth'] = best_bid_price * best_bid_size
-            
+
             # Best ask depth (lowest price)
             asks = order_book[side].get('asks', {})
             if asks:
                 best_ask_price = min(asks.keys())
                 best_ask_size = asks[best_ask_price]
                 result[side]['ask_depth'] = best_ask_price * best_ask_size
-        
+
         return result
     
     # =========================================================================

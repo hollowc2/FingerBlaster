@@ -678,9 +678,7 @@ class OrderExecutor:
         
         target_token_id = token_map[side]
         try:
-            resp = await asyncio.to_thread(
-                self.connector.create_market_order, target_token_id, size, 'BUY'
-            )
+            resp = await self.connector.create_market_order(target_token_id, size, 'BUY')
             if resp and isinstance(resp, dict) and resp.get('orderID'):
                 return resp
             else:
@@ -700,20 +698,20 @@ class OrderExecutor:
             List of order responses
         """
         try:
-            results = await asyncio.to_thread(self.connector.flatten_market, token_map)
+            results = await self.connector.flatten_market(token_map)
             return results if results else []
         except Exception as e:
             logger.error(f"Flatten error: {e}", exc_info=True)
             return []
-    
+
     async def cancel_all_orders(self) -> bool:
         """Cancel all pending orders.
-        
+
         Returns:
             True if successful, False otherwise
         """
         try:
-            result = await asyncio.to_thread(self.connector.cancel_all_orders)
+            result = await self.connector.cancel_all_orders()
             return bool(result)
         except Exception as e:
             logger.error(f"Cancel all error: {e}", exc_info=True)

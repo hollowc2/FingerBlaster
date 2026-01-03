@@ -880,24 +880,24 @@ class FingerBlasterCore:
         """Update account statistics with improved error handling."""
         try:
             token_map = await self.market_manager.get_token_map()
-            
-            def get_stats() -> Tuple[float, float, float]:
-                """Get account statistics synchronously."""
-                bal = self.connector.get_usdc_balance()
+
+            async def get_stats() -> Tuple[float, float, float]:
+                """Get account statistics asynchronously."""
+                bal = await self.connector.get_usdc_balance()
                 yes_bal = 0.0
                 no_bal = 0.0
                 if token_map:
                     y_id = token_map.get('YES')
                     n_id = token_map.get('NO')
                     if y_id:
-                        yes_bal = self.connector.get_token_balance(y_id)
+                        yes_bal = await self.connector.get_token_balance(y_id)
                     if n_id:
-                        no_bal = self.connector.get_token_balance(n_id)
+                        no_bal = await self.connector.get_token_balance(n_id)
                 return float(bal or 0.0), float(yes_bal or 0.0), float(no_bal or 0.0)
-            
+
             try:
                 bal, y, n = await asyncio.wait_for(
-                    asyncio.to_thread(get_stats),
+                    get_stats(),
                     timeout=5.0
                 )
             except asyncio.TimeoutError:
@@ -1007,9 +1007,9 @@ class FingerBlasterCore:
                 y_id = token_map.get('YES')
                 n_id = token_map.get('NO')
                 if y_id:
-                    yes_position = self.connector.get_token_balance(y_id)
+                    yes_position = await self.connector.get_token_balance(y_id)
                 if n_id:
-                    no_position = self.connector.get_token_balance(n_id)
+                    no_position = await self.connector.get_token_balance(n_id)
             
             # Get prior outcomes for regime detection
             prior_outcomes_data = await self._get_prior_outcomes()
@@ -1634,9 +1634,9 @@ class FingerBlasterCore:
             old_yes_bal = 0.0
             old_no_bal = 0.0
             if y_id:
-                old_yes_bal = self.connector.get_token_balance(y_id)
+                old_yes_bal = await self.connector.get_token_balance(y_id)
             if n_id:
-                old_no_bal = self.connector.get_token_balance(n_id)
+                old_no_bal = await self.connector.get_token_balance(n_id)
             
             resp = await self.order_executor.execute_order(side, size, token_map)
             

@@ -111,13 +111,18 @@ class DataCard(Container):
                 yield self.fv_widget
                 yield self.edge_widget
     
-    def update(self, price: float, best_bid: float, best_ask: float, 
-                depth: float, fv: Optional[float], edge_bps: Optional[float]):
+    def update(self, price: float, best_bid: float, best_ask: float,
+                depth: Optional[float], fv: Optional[float], edge_bps: Optional[float]):
         percentage = price * 100
         if self.percentage_widget:
             self.percentage_widget.update(f"{percentage:.1f}")
-        
-        depth_str = format_depth(depth) if depth else "0"
+
+        if depth is None:
+            depth_str = "N/A"
+        elif depth:
+            depth_str = format_depth(depth)
+        else:
+            depth_str = "0"
         if self.depth_widget:
             self.depth_widget.update(f"DEPTH\n[#EAB308]{depth_str}[/]")
         
@@ -313,10 +318,14 @@ class TradingTUI(App):
             # This allows Chainlink price data to be available for dynamic strike resolution
             await asyncio.sleep(2.0)
             await self.core.update_market_status()
-            
+
+            # Wait for WebSocket to connect and receive initial order book snapshot
+            # This ensures order books are populated before analytics calculations begin
+            await asyncio.sleep(2.0)
+
             # Refresh UI with initial values after mount
             self._refresh_ui_values()
-            
+
             self.set_interval(0.1, self._update_loop)
             self.set_interval(self.core.config.market_status_interval, self._update_market_status)
             
@@ -591,7 +600,8 @@ class TradingTUI(App):
         try:
             yes_card = self.query_one("#card-yes", DataCard)
             # Use analytics data if available, otherwise use defaults
-            yes_depth = self.analytics.yes_ask_depth or 0.0 if self.analytics else 0.0
+            # Note: depth can be None if order book not yet populated
+            yes_depth = self.analytics.yes_ask_depth if self.analytics else None
             yes_fv = self.analytics.fair_value_yes if self.analytics else None
             yes_edge = self.analytics.edge_bps_yes if self.analytics else None
             yes_card.update(
@@ -609,7 +619,8 @@ class TradingTUI(App):
             no_ask = 1.0 - self.best_bid if self.best_bid > 0.0 else 1.0
             no_card = self.query_one("#card-no", DataCard)
             # Use analytics data if available, otherwise use defaults
-            no_depth = self.analytics.no_ask_depth or 0.0 if self.analytics else 0.0
+            # Note: depth can be None if order book not yet populated
+            no_depth = self.analytics.no_ask_depth if self.analytics else None
             no_fv = self.analytics.fair_value_no if self.analytics else None
             no_edge = self.analytics.edge_bps_no if self.analytics else None
             no_card.update(

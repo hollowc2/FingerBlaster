@@ -173,9 +173,7 @@ class PositionManagerApp(ModalScreen):
             # YES position
             yes_token_id = token_map.get('YES')
             if yes_token_id:
-                yes_shares = await asyncio.to_thread(
-                    self.core.connector.get_token_balance, yes_token_id
-                )
+                yes_shares = await self.core.connector.get_token_balance(yes_token_id)
                 if yes_shares > 0.1:  # MIN_BALANCE_THRESHOLD
                     entry_price = self.core.avg_entry_price_yes
                     current_price = yes_price
@@ -200,9 +198,7 @@ class PositionManagerApp(ModalScreen):
             # NO position
             no_token_id = token_map.get('NO')
             if no_token_id:
-                no_shares = await asyncio.to_thread(
-                    self.core.connector.get_token_balance, no_token_id
-                )
+                no_shares = await self.core.connector.get_token_balance(no_token_id)
                 if no_shares > 0.1:  # MIN_BALANCE_THRESHOLD
                     entry_price = self.core.avg_entry_price_no
                     current_price = no_price

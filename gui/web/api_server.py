@@ -712,13 +712,13 @@ async def _gather_full_state() -> dict:
         if not strike_value:
             logger.debug(f"Market exists but no strike_price found. Market keys: {list(market.keys())}")
     
-    # Get account balances (use asyncio.to_thread with timeout to avoid blocking)
+    # Get account balances (async methods with timeout)
     balance = 0.0
     yes_bal = 0.0
     no_bal = 0.0
     try:
         balance = await asyncio.wait_for(
-            asyncio.to_thread(core.connector.get_usdc_balance),
+            core.connector.get_usdc_balance(),
             timeout=3.0
         )
         if token_map:
@@ -726,12 +726,12 @@ async def _gather_full_state() -> dict:
             n_id = token_map.get('NO')
             if y_id:
                 yes_bal = await asyncio.wait_for(
-                    asyncio.to_thread(core.connector.get_token_balance, y_id),
+                    core.connector.get_token_balance(y_id),
                     timeout=3.0
                 )
             if n_id:
                 no_bal = await asyncio.wait_for(
-                    asyncio.to_thread(core.connector.get_token_balance, n_id),
+                    core.connector.get_token_balance(n_id),
                     timeout=3.0
                 )
     except asyncio.TimeoutError:
