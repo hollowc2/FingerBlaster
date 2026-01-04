@@ -102,8 +102,8 @@ class SignalCard(Static):
         super().__init__(id=id)
         self.title = title
         self.timeframe = (timeframe or "").strip()
-        self.signal = signal
-        self.series: List[float] = []
+        self.series: List[float] = []  # Initialize BEFORE setting signal (reactive)
+        self.signal = signal  # This triggers watch_signal() which needs self.series
 
     def watch_signal(self, signal: Signal) -> None:
         """Reactively update when signal changes."""
@@ -284,75 +284,95 @@ class MarketDashboard(App):
 
     def __init__(self):
         super().__init__()
+        logger.info("MarketDashboard.__init__() called")
         self.core: Optional[PulseCore] = None
         self._indicator_snapshots: Dict[Timeframe, IndicatorSnapshot] = {}
         self._current_ticker: Optional[Ticker] = None
+        logger.info("MarketDashboard.__init__() completed")
 
     def compose(self) -> ComposeResult:
-        yield CombinedHeaderWidget(id="combined_header")
+        try:
+            logger.info("compose() called")
+            yield CombinedHeaderWidget(id="combined_header")
+            logger.info("Header widget yielded")
 
-        with Grid():
-            yield SignalCard(
-                "Loading", "10s HFT",
-                Signal("Loading", 50, "Initializing...", {}),
-                id="ltf-10s"
-            )
-            yield SignalCard(
-                "Loading", "1m Scalp",
-                Signal("Loading", 50, "Initializing...", {}),
-                id="ltf-1m"
-            )
-            yield SignalCard(
-                "Loading", "15m Intraday",
-                Signal("Loading", 50, "Initializing...", {}),
-                id="ltf-15m"
-            )
-            yield SignalCard(
-                "Loading", "1h",
-                Signal("Loading", 50, "Initializing...", {}),
-                id="htf-1h"
-            )
-            yield SignalCard(
-                "Loading", "4h",
-                Signal("Loading", 50, "Initializing...", {}),
-                id="htf-4h"
-            )
-            yield SignalCard(
-                "Loading", "Daily",
-                Signal("Loading", 50, "Initializing...", {}),
-                id="htf-daily"
-            )
+            with Grid():
+                logger.info("Grid context entered")
+                yield SignalCard(
+                    "Loading", "10s HFT",
+                    Signal("Loading", 50, "Initializing...", {}),
+                    id="ltf-10s"
+                )
+                yield SignalCard(
+                    "Loading", "1m Scalp",
+                    Signal("Loading", 50, "Initializing...", {}),
+                    id="ltf-1m"
+                )
+                yield SignalCard(
+                    "Loading", "15m Intraday",
+                    Signal("Loading", 50, "Initializing...", {}),
+                    id="ltf-15m"
+                )
+                yield SignalCard(
+                    "Loading", "1h",
+                    Signal("Loading", 50, "Initializing...", {}),
+                    id="htf-1h"
+                )
+                yield SignalCard(
+                    "Loading", "4h",
+                    Signal("Loading", 50, "Initializing...", {}),
+                    id="htf-4h"
+                )
+                yield SignalCard(
+                    "Loading", "Daily",
+                    Signal("Loading", 50, "Initializing...", {}),
+                    id="htf-daily"
+                )
+            logger.info("All widgets composed successfully")
+        except Exception as e:
+            logger.error(f"Error in compose(): {e}", exc_info=True)
+            raise
 
     async def on_mount(self) -> None:
         """Initialize PulseCore and register callbacks."""
-        # Configure for exactly the 6 required timeframes
-        config = PulseConfig(
-            products=["BTC-USD"],
-            enabled_timeframes={
-                Timeframe.TEN_SEC,
-                Timeframe.ONE_MIN,
-                Timeframe.FIFTEEN_MIN,
-                Timeframe.ONE_HOUR,
-                Timeframe.FOUR_HOUR,
-                Timeframe.ONE_DAY,
-            },
-        )
+        try:
+            logger.info("on_mount() started")
+            # Configure for exactly the 6 required timeframes
+            config = PulseConfig(
+                products=["BTC-USD"],
+                enabled_timeframes={
+                    Timeframe.TEN_SEC,
+                    Timeframe.ONE_MIN,
+                    Timeframe.FIFTEEN_MIN,
+                    Timeframe.ONE_HOUR,
+                    Timeframe.FOUR_HOUR,
+                    Timeframe.ONE_DAY,
+                },
+            )
+            logger.info("Config created")
 
-        self.core = PulseCore(config=config)
+            self.core = PulseCore(config=config)
+            logger.info("PulseCore instantiated")
 
-        # Register callbacks
-        self.core.register_callback('ticker_update', self._on_ticker_update)
-        self.core.register_callback('indicator_update', self._on_indicator_update)
-        self.core.register_callback('connection_status', self._on_connection_status)
-        self.core.register_callback('priming_progress', self._on_priming_progress)
-        self.core.register_callback('priming_complete', self._on_priming_complete)
-        self.core.register_callback('alert', self._on_alert)
+            # Register callbacks
+            self.core.register_callback('ticker_update', self._on_ticker_update)
+            self.core.register_callback('indicator_update', self._on_indicator_update)
+            self.core.register_callback('connection_status', self._on_connection_status)
+            self.core.register_callback('priming_progress', self._on_priming_progress)
+            self.core.register_callback('priming_complete', self._on_priming_complete)
+            self.core.register_callback('alert', self._on_alert)
+            logger.info("Callbacks registered")
 
-        # Start PulseCore in background
-        self.run_worker(self._start_core(), exclusive=True)
+            # Start PulseCore in background
+            self.run_worker(self._start_core(), exclusive=True)
+            logger.info("Worker started")
 
-        # Start flash timer for alignment effects
-        self._flash_timer = self.set_interval(0.5, self._flash_toggle)
+            # Start flash timer for alignment effects
+            self._flash_timer = self.set_interval(0.5, self._flash_toggle)
+            logger.info("on_mount() completed successfully")
+        except Exception as e:
+            logger.error(f"Error in on_mount: {e}", exc_info=True)
+            raise
 
     async def _start_core(self) -> None:
         """Start PulseCore (runs in worker thread)."""
@@ -683,8 +703,14 @@ class MarketDashboard(App):
 
 def run_pulse_app():
     """Entry point for Pulse terminal dashboard."""
-    app = MarketDashboard()
-    app.run()
+    try:
+        app = MarketDashboard()
+        app.run()
+    except Exception as e:
+        logger.error(f"Pulse app crashed: {e}", exc_info=True)
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 if __name__ == "__main__":
