@@ -1,8 +1,5 @@
-"""
-Pulse GUI - Frontend components for Pulse.
+"""Pulse GUI Package - Textual-based terminal dashboard."""
 
-This module will contain the frontend implementation for Pulse.
-Currently a placeholder for future development.
-"""
+from pulse.gui.main import MarketDashboard, run_pulse_app
 
-__all__ = []
+__all__ = ["MarketDashboard", "run_pulse_app"]

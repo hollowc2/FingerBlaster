@@ -24,7 +24,16 @@ logger = logging.getLogger("FingerBlaster")
 
 def main():
     """Main entry point - routes to appropriate UI based on command line arguments."""
-    if "--desktop" in sys.argv or "--pyqt" in sys.argv:
+    if "--pulse" in sys.argv:
+        # Import and run Pulse terminal UI
+        try:
+            from pulse.gui.main import run_pulse_app
+            run_pulse_app()
+        except ImportError as e:
+            logger.error(f"Pulse UI not available: {e}")
+            print("ERROR: Pulse UI not available.")
+            sys.exit(1)
+    elif "--desktop" in sys.argv or "--pyqt" in sys.argv:
         # Import and run PyQt6 UI
         try:
             from gui.desktop.main import run_pyqt_app
