@@ -141,23 +141,23 @@ class AnalyticsEngine:
     def calculate_basis_points(
         self, 
         current_price: float, 
-        strike_price: float
+        price_to_beat: float
     ) -> Optional[float]:
-        """Calculate basis points distance from strike.
+        """Calculate basis points distance from price to beat.
         
-        Formula: ((Current BTC Price - Strike) / Strike) * 10,000
+        Formula: ((Current BTC Price - Price to Beat) / Price to Beat) * 10,000
         
         Args:
             current_price: Current BTC price
-            strike_price: Strike price
+            price_to_beat: Price to beat
             
         Returns:
-            Basis points as float, positive = above strike
+            Basis points as float, positive = above price to beat
         """
-        if strike_price <= 0 or current_price <= 0:
+        if price_to_beat <= 0 or current_price <= 0:
             return None
         
-        return ((current_price - strike_price) / strike_price) * self.BPS_MULTIPLIER
+        return ((current_price - price_to_beat) / price_to_beat) * self.BPS_MULTIPLIER
     
     # =========================================================================
     # BINARY FAIR VALUE (SIMPLIFIED BLACK-SCHOLES)
@@ -166,7 +166,7 @@ class AnalyticsEngine:
     def calculate_binary_fair_value(
         self,
         current_price: float,
-        strike_price: float,
+        price_to_beat: float,
         time_to_expiry_seconds: float,
         volatility: Optional[float] = None
     ) -> Tuple[Optional[float], Optional[float]]:
@@ -180,14 +180,14 @@ class AnalyticsEngine:
         
         Args:
             current_price: Current BTC price
-            strike_price: Strike price
+            price_to_beat: Price to beat
             time_to_expiry_seconds: Time to expiry in seconds
             volatility: Optional volatility override (annualized)
             
         Returns:
             Tuple of (fair_value_yes, fair_value_no) as probabilities [0,1]
         """
-        if strike_price <= 0 or current_price <= 0 or time_to_expiry_seconds <= 0:
+        if price_to_beat <= 0 or current_price <= 0 or time_to_expiry_seconds <= 0:
             return None, None
         
         # Use provided volatility or estimate from recent data
@@ -203,18 +203,18 @@ class AnalyticsEngine:
         # Prevent numerical issues with very small T
         if T < 1e-10:
             # At expiry, it's a binary outcome
-            return (1.0, 0.0) if current_price >= strike_price else (0.0, 1.0)
+            return (1.0, 0.0) if current_price >= price_to_beat else (0.0, 1.0)
         
         try:
             sigma_sqrt_t = volatility * math.sqrt(T)
             
             # Prevent division by zero
             if sigma_sqrt_t < 1e-10:
-                return (1.0, 0.0) if current_price >= strike_price else (0.0, 1.0)
+                return (1.0, 0.0) if current_price >= price_to_beat else (0.0, 1.0)
             
             # d2 = (ln(S/K) + (r - σ²/2)T) / (σ√T)
             # With r = 0: d2 = (ln(S/K) - σ²T/2) / (σ√T)
-            d2 = (math.log(current_price / strike_price) - 
+            d2 = (math.log(current_price / price_to_beat) - 
                   (volatility ** 2) * T / 2) / sigma_sqrt_t
             
             # N(d2) using standard normal CDF
@@ -333,24 +333,24 @@ class AnalyticsEngine:
     def calculate_z_score(
         self,
         current_price: float,
-        strike_price: float,
+        price_to_beat: float,
         time_to_expiry_seconds: float,
         volatility: Optional[float] = None
     ) -> Tuple[Optional[float], str]:
-        """Calculate how many standard deviations price is from strike.
+        """Calculate how many standard deviations price is from price to beat.
         
         Z = (ln(S/K)) / (σ√T)
         
         Args:
             current_price: Current BTC price
-            strike_price: Strike price
+            price_to_beat: Price to beat
             time_to_expiry_seconds: Time remaining
             volatility: Optional volatility override
             
         Returns:
             Tuple of (z_score, sigma_label)
         """
-        if strike_price <= 0 or current_price <= 0:
+        if price_to_beat <= 0 or current_price <= 0:
             return None, ""
         
         if volatility is None:
@@ -368,7 +368,7 @@ class AnalyticsEngine:
             if sigma_sqrt_t < 1e-10:
                 return None, ""
             
-            z = math.log(current_price / strike_price) / sigma_sqrt_t
+            z = math.log(current_price / price_to_beat) / sigma_sqrt_t
             
             # Create sigma label
             sign = "+" if z >= 0 else ""
@@ -688,7 +688,7 @@ class AnalyticsEngine:
     async def generate_snapshot(
         self,
         btc_price: float,
-        strike_price: float,
+        price_to_beat: float,
         time_remaining_seconds: int,
         yes_market_price: float,
         no_market_price: float,
@@ -706,7 +706,7 @@ class AnalyticsEngine:
         
         Args:
             btc_price: Current BTC price
-            strike_price: Market strike price
+            price_to_beat: Market price to beat
             time_remaining_seconds: Seconds until expiry
             yes_market_price: Current YES market price
             no_market_price: Current NO market price
@@ -727,14 +727,14 @@ class AnalyticsEngine:
         # Calculate all analytics
         
         # 1. Basis points
-        bps = self.calculate_basis_points(btc_price, strike_price)
+        bps = self.calculate_basis_points(btc_price, price_to_beat)
         
         # 2. Get realized volatility
         volatility = self._get_realized_volatility()
         
         # 3. Fair value
         fv_yes, fv_no = self.calculate_binary_fair_value(
-            btc_price, strike_price, time_remaining_seconds, volatility
+            btc_price, price_to_beat, time_remaining_seconds, volatility
         )
         
         # 4. Edge detection
@@ -747,7 +747,7 @@ class AnalyticsEngine:
         
         # 5. Z-score
         z_score, sigma_label = self.calculate_z_score(
-            btc_price, strike_price, time_remaining_seconds, volatility
+            btc_price, price_to_beat, time_remaining_seconds, volatility
         )
         
         # 6. Liquidity depth

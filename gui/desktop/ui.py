@@ -35,8 +35,8 @@ class MarketPanel(QFrame):
         title.setStyleSheet("font-weight: bold; color: #00ffff; font-size: 13pt;")
         layout.addWidget(title)
         
-        # Strike
-        self.strike_label = QLabel("STRIKE: N/A")
+        # Price to Beat
+        self.strike_label = QLabel("PRICE TO BEAT: N/A")
         self.strike_label.setStyleSheet("color: #ffff00; font-size: 11pt;")
         layout.addWidget(self.strike_label)
         
@@ -101,10 +101,10 @@ class MarketPanel(QFrame):
             else:
                 self.time_label.setStyleSheet("color: #ff0000; font-weight: bold; font-size: 16pt; background-color: #000000;")
     
-    def update_strike(self, strike: str):
-        """Update strike price."""
+    def update_price_to_beat(self, strike: str):
+        """Update price to beat."""
         self.strike = strike
-        self.strike_label.setText(f"STRIKE: {strike}")
+        self.strike_label.setText(f"PRICE TO BEAT: {strike}")
     
     def update_ends(self, ends: str):
         """Update end time."""
@@ -589,7 +589,7 @@ class BTCChart(QWidget):
         if strike_val is not None:
             if self._strike_line is None:
                 self._strike_line = self.ax.axhline(
-                    y=strike_val, color='yellow', linestyle='--', linewidth=2, label='STRIKE'
+                    y=strike_val, color='yellow', linestyle='--', linewidth=2, label='PRICE TO BEAT'
                 )
             else:
                 self._strike_line.set_ydata([strike_val, strike_val])

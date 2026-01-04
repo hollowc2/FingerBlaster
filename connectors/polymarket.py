@@ -57,6 +57,7 @@ class NetworkConstants:
     POLYGON_RPC_URL = "https://polygon-rpc.com"
     CLOB_HOST = "https://clob.polymarket.com"
     GAMMA_API_URL = "https://gamma-api.polymarket.com"
+    DATA_API_URL = "https://data-api.polymarket.com"
     BINANCE_API_URL = "https://api.binance.com/api/v3"
     USDC_CONTRACT_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
     REQUEST_TIMEOUT = 10
@@ -409,19 +410,19 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
         logger.warning(f"Could not parse JSON list: {json_str[:50]}...")
         return []
     
-    def _extract_strike_price(self, market: Dict[str, Any], event: Dict[str, Any]) -> str:
+    def _extract_price_to_beat(self, market: Dict[str, Any], event: Dict[str, Any]) -> str:
         """
-        Extract strike price from market data using multiple strategies.
+        Extract price to beat from market data using multiple strategies.
         
         Improved to check more fields and be more accurate.
-        For dynamic strikes, uses RTDS or fetches price at exact market start time.
+        For dynamic prices to beat, uses RTDS or fetches price at exact market start time.
         
         Args:
             market: Market data dictionary
             event: Event data dictionary
             
         Returns:
-            Strike price as string
+            Price to beat as string
         """
         # Log all available fields for debugging (first time only to avoid spam)
         if not hasattr(self, '_logged_fields'):
@@ -631,8 +632,8 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
             logger.warning("No CLOB token IDs found in market data")
             return None
         
-        # Extract strike price
-        strike_price = self._extract_strike_price(market, event)
+        # Extract price to beat
+        price_to_beat = self._extract_price_to_beat(market, event)
         
         # Build response
         result = {
@@ -641,7 +642,7 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
             'token_id': clob_token_ids[0],  # Primary token
             'token_ids': clob_token_ids,
             'end_date': event.get('endDate'),
-            'strike_price': str(strike_price),
+            'price_to_beat': str(price_to_beat),
             'question': market.get('question', '') or event.get('question', ''),
             'title': market.get('title', '') or event.get('title', '')
         }
@@ -679,7 +680,70 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
                 return 0.0
 
         return await asyncio.to_thread(_sync_get_balance)
-    
+
+    async def get_positions(
+        self,
+        market_ids: Optional[List[str]] = None,
+        size_threshold: float = 0.1
+    ) -> List[Dict[str, Any]]:
+        """
+        Get user positions with entry prices and PnL from Polymarket Data API.
+
+        Args:
+            market_ids: Optional list of condition IDs to filter by
+            size_threshold: Minimum position size (default 0.1)
+
+        Returns:
+            List of position dicts with keys:
+                - asset: token ID
+                - size: position quantity
+                - avgPrice: average entry price
+                - curPrice: current market price
+                - initialValue: opening position value
+                - currentValue: present position value
+                - cashPnl: profit/loss in USDC
+                - percentPnl: profit/loss percentage
+                - outcome: YES or NO
+                - conditionId: market condition ID
+        """
+        try:
+            # Use proxy wallet if configured, otherwise use EOA address
+            # Positions are held in the proxy wallet on Polymarket
+            wallet_address = os.getenv("WALLET_ADDRESS") or self.client.get_address()
+            if not wallet_address:
+                logger.warning("No wallet address available for positions query")
+                return []
+
+            params = {
+                "user": wallet_address,
+                "sizeThreshold": size_threshold,
+                "limit": 100,
+            }
+            if market_ids:
+                params["market"] = ",".join(market_ids)
+
+            url = f"{NetworkConstants.DATA_API_URL}/positions"
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
+                    if response.status == 200:
+                        positions = await response.json()
+                        logger.debug(f"Fetched {len(positions)} positions from Data API")
+                        return positions
+                    else:
+                        logger.warning(
+                            f"Data API returned status {response.status}: "
+                            f"{await response.text()}"
+                        )
+                        return []
+        except Exception as e:
+            logger.error(f"Error fetching positions from Data API: {e}")
+            return []
+
     async def flatten_market(self, token_map: Dict[str, str]) -> List[Any]:
         """
         Close all positions in the given token map (YES and NO) (async wrapper).
@@ -893,18 +957,18 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
                                         threshold_val = float(threshold)
                                         if threshold_val > 0:
                                             logger.info(f"Found strike in detailed market groupItemThreshold: {threshold_val:,.2f}")
-                                            market_data['strike_price'] = f"{threshold_val:,.2f}"
+                                            market_data['price_to_beat'] = f"{threshold_val:,.2f}"
                                             return market_data
                                     except (ValueError, TypeError):
                                         pass
 
-                            detailed_strike = self._extract_strike_price(
+                            detailed_strike = self._extract_price_to_beat(
                                 detailed_market.get('markets', [{}])[0] if detailed_market.get('markets') else detailed_market,
                                 detailed_market if 'endDate' in detailed_market else target_event
                             )
                             if detailed_strike and detailed_strike != "N/A":
                                 logger.info(f"Found strike from detailed market data: {detailed_strike}")
-                                market_data['strike_price'] = detailed_strike
+                                market_data['price_to_beat'] = detailed_strike
 
                     # Also try querying the market's resolution endpoint if it exists
                     # Some markets might expose the strike via a resolution query
@@ -921,7 +985,7 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
                                         resolution_data.get('price'))
                                 if strike:
                                     logger.info(f"Found strike from resolution endpoint: {strike}")
-                                    market_data['strike_price'] = str(strike)
+                                    market_data['price_to_beat'] = str(strike)
                     except Exception as e:
                         logger.debug(f"Resolution endpoint check failed (may not exist): {e}")
 

@@ -125,7 +125,7 @@ export function useFingerBlaster(options: UseFingerBlasterOptions = {}): UseFing
 
   // Market state
   const [marketActive, setMarketActive] = useState(false);
-  const [strike, setStrike] = useState('--');
+  const [priceToBeat, setPriceToBeat] = useState('--');
   const [endDate, setEndDate] = useState<string | null>(null);
 
   // Price state (stored as 0-1, converted to 0-100 for display)
@@ -180,14 +180,14 @@ export function useFingerBlaster(options: UseFingerBlasterOptions = {}): UseFing
   // Process initial state from WebSocket
   const processInitialState = useCallback((data: InitialState) => {
     setMarketActive(data.market.active);
-    // Handle strike price - check for null, undefined, 'N/A', etc.
-    const strikeVal = data.market.strike;
+    // Handle price to beat - check for null, undefined, 'N/A', etc.
+    const strikeVal = data.market.priceToBeat;
     if (strikeVal && strikeVal !== 'N/A' && strikeVal !== 'None' && strikeVal !== '') {
-      setStrike(strikeVal);
-      console.log('Strike price set from initial state:', strikeVal);
+      setPriceToBeat(strikeVal);
+      console.log('Price to beat set from initial state:', strikeVal);
     } else {
-      setStrike('--');
-      console.log('Strike price not available. Received:', strikeVal, 'Market active:', data.market.active);
+      setPriceToBeat('--');
+      console.log('Price to beat not available. Received:', strikeVal, 'Market active:', data.market.active);
     }
     setEndDate(data.market.endDate);
     setPrices(data.prices);
@@ -249,12 +249,12 @@ export function useFingerBlaster(options: UseFingerBlasterOptions = {}): UseFing
           break;
           
         case 'market_update':
-          const strikeVal = msg.data.strike;
+          const strikeVal = msg.data.priceToBeat;
           if (strikeVal && strikeVal !== 'N/A' && strikeVal !== 'None' && strikeVal !== '') {
-            setStrike(strikeVal);
-            console.log('Strike price updated from market_update:', strikeVal);
+            setPriceToBeat(strikeVal);
+            console.log('Price to beat updated from market_update:', strikeVal);
           } else {
-            console.log('Market update received but strike invalid:', strikeVal);
+            console.log('Market update received but price to beat invalid:', strikeVal);
           }
           setMarketActive(true);
           break;
@@ -479,7 +479,7 @@ export function useFingerBlaster(options: UseFingerBlasterOptions = {}): UseFing
     
     // Market
     marketActive,
-    strike,
+    priceToBeat,
     endDate,
     
     // Prices (convert to 0-100 scale for display)

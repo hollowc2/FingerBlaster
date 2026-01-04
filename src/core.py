@@ -48,6 +48,9 @@ CALLBACK_EVENTS: Tuple[str, ...] = (
     'flatten_started',   # () - flatten operation started
     'flatten_completed', # (orders_processed: int) - flatten operation completed
     'flatten_failed',    # (error: str) - flatten operation failed
+    'cancel_started',    # () - cancel all operation started
+    'cancel_completed',  # () - cancel all operation completed
+    'cancel_failed',     # (error: str) - cancel all operation failed
 )
 
 
@@ -183,33 +186,36 @@ class CallbackManager:
 
 class PositionTracker:
     """Tracks average entry prices for YES/NO positions.
-    
+
     Provides clean separation of position tracking logic with proper
     validation and weighted average calculations.
+
+    Note: Entry prices are now fetched from Polymarket Data API in position_manager.
+    This class is kept for backward compatibility with other parts of the codebase.
     """
-    
+
     def __init__(self):
         """Initialize position tracker."""
         self._avg_prices: Dict[str, Optional[float]] = {
             'YES': None,
             'NO': None,
         }
-    
+
     def update_position(
-        self, 
-        side: str, 
+        self,
+        side: str,
         old_balance: float,
-        new_shares: float, 
+        new_shares: float,
         entry_price: float
     ) -> bool:
         """Update position with new trade.
-        
+
         Args:
             side: Which side was traded ('YES' or 'NO')
             old_balance: Balance before trade
             new_shares: Shares received from trade
             entry_price: Price paid per share
-            
+
         Returns:
             True if update was successful, False otherwise
         """
@@ -217,18 +223,18 @@ class PositionTracker:
         if side not in ('YES', 'NO'):
             logger.warning(f"Invalid side for position update: {side}")
             return False
-        
+
         if entry_price <= 0 or new_shares <= 0:
             logger.warning(
                 f"Invalid position update: price={entry_price}, shares={new_shares}"
             )
             return False
-        
+
         total_shares = old_balance + new_shares
         if total_shares <= 0:
             self._avg_prices[side] = None
             return True
-        
+
         current_avg = self._avg_prices[side]
         if current_avg is not None and old_balance > 0:
             # Weighted average: (old_cost + new_cost) / total_shares
@@ -238,12 +244,12 @@ class PositionTracker:
         else:
             # First position
             self._avg_prices[side] = entry_price
-        
+
         return True
-    
+
     def reset(self, side: Optional[str] = None) -> None:
         """Reset position tracking for one or all sides.
-        
+
         Args:
             side: Side to reset ('YES', 'NO'), or None for both
         """
@@ -252,33 +258,33 @@ class PositionTracker:
             self._avg_prices['NO'] = None
         elif side.upper() in ('YES', 'NO'):
             self._avg_prices[side.upper()] = None
-    
+
     def get_average_price(self, side: str) -> Optional[float]:
         """Get current average entry price for a side.
-        
+
         Args:
             side: Side to get price for ('YES' or 'NO')
-            
+
         Returns:
             Average entry price or None if no position
         """
         return self._avg_prices.get(side.upper())
-    
+
     @property
     def avg_entry_price_yes(self) -> Optional[float]:
         """Get YES average entry price."""
         return self._avg_prices['YES']
-    
+
     @avg_entry_price_yes.setter
     def avg_entry_price_yes(self, value: Optional[float]) -> None:
         """Set YES average entry price."""
         self._avg_prices['YES'] = value
-    
+
     @property
     def avg_entry_price_no(self) -> Optional[float]:
         """Get NO average entry price."""
         return self._avg_prices['NO']
-    
+
     @avg_entry_price_no.setter
     def avg_entry_price_no(self, value: Optional[float]) -> None:
         """Set NO average entry price."""
@@ -521,8 +527,8 @@ class FingerBlasterCore:
                     market = await self.market_manager.get_market()
                     strike_val = None
                     if market:
-                        strike_str = str(market.get('strike_price', ''))
-                        strike_val = self._parse_strike(strike_str)
+                        strike_str = str(market.get('price_to_beat', ''))
+                        strike_val = self._parse_price_to_beat(strike_str)
                     self._emit('chart_update', prices, strike_val, 'btc')
         except Exception as e:
             logger.error(f"Error handling RTDS BTC price: {e}", exc_info=True)
@@ -583,12 +589,12 @@ class FingerBlasterCore:
             history = await self.history_manager.get_yes_history()
             self._emit('chart_update', history)
     
-    async def _resolve_dynamic_strike(
+    async def _resolve_dynamic_price_to_beat(
         self, 
         new_market: Dict[str, Any], 
         market_start_time: pd.Timestamp
     ) -> str:
-        """Resolve dynamic strike price using RTDS or API fallback.
+        """Resolve dynamic price to beat using RTDS or API fallback.
         
         This method attempts to get the Chainlink BTC/USD price at market start
         using multiple fallback strategies:
@@ -601,7 +607,7 @@ class FingerBlasterCore:
             market_start_time: When the market started
             
         Returns:
-            Resolved strike price as formatted string, or "Dynamic" if unresolved
+            Resolved price to beat as formatted string, or "Dynamic" if unresolved
         """
         now = pd.Timestamp.now(tz='UTC')
         time_since_start = (now - market_start_time).total_seconds()
@@ -614,7 +620,7 @@ class FingerBlasterCore:
                 self.log_msg(
                     f"Dynamic strike: Using RTDS Chainlink price at market start: ${chainlink_price:,.2f}"
                 )
-                new_market['strike_price'] = strike
+                new_market['price_to_beat'] = strike
                 await self.market_manager.set_market(new_market)
                 return strike
         else:
@@ -641,7 +647,7 @@ class FingerBlasterCore:
             self.log_msg(
                 f"Dynamic strike: Using Chainlink API price at market start: ${chainlink_price:,.2f}"
             )
-            new_market['strike_price'] = strike
+            new_market['price_to_beat'] = strike
             await self.market_manager.set_market(new_market)
             return strike
 
@@ -656,7 +662,7 @@ class FingerBlasterCore:
                 self.log_msg(
                     f"Dynamic strike: Using current RTDS Chainlink price (same oracle as Polymarket): ${current_chainlink:,.2f}"
                 )
-                new_market['strike_price'] = strike
+                new_market['price_to_beat'] = strike
                 await self.market_manager.set_market(new_market)
                 print(f"[CORE] Resolved strike to: {strike}", flush=True)
                 return strike
@@ -681,7 +687,7 @@ class FingerBlasterCore:
             self.log_msg(
                 f"WARNING: Dynamic strike using Binance fallback (Chainlink not available): ${price_str}"
             )
-            new_market['strike_price'] = price_str
+            new_market['price_to_beat'] = price_str
             await self.market_manager.set_market(new_market)
             return price_str
         
@@ -699,7 +705,7 @@ class FingerBlasterCore:
                     f"WARNING: Could not determine dynamic strike at market start ({market_start_time}). "
                     f"Market started {time_since_start:.0f}s ago. Using current price fallback: ${strike}"
                 )
-                new_market['strike_price'] = strike
+                new_market['price_to_beat'] = strike
                 await self.market_manager.set_market(new_market)
                 return strike
         except Exception as e:
@@ -760,7 +766,7 @@ class FingerBlasterCore:
                     if success:
                         print("[CORE] Clearing YES history...", flush=True)
                         await self.history_manager.clear_yes_history()
-                        strike = str(new_market.get('strike_price', 'N/A'))
+                        strike = str(new_market.get('price_to_beat', 'N/A'))
 
                         # Resolve dynamic strikes
                         print("[CORE] Getting market start time...", flush=True)
@@ -768,17 +774,17 @@ class FingerBlasterCore:
                         if strike == "Dynamic" and market_start_time:
                             print("[CORE] Resolving dynamic strike...", flush=True)
                             # Set strike to "Loading" while resolving
-                            new_market['strike_price'] = "Loading"
+                            new_market['price_to_beat'] = "Loading"
                             await self.market_manager.set_market(new_market)
                             # Emit market update to show "Loading"
                             self._emit('market_update', "Loading", new_market.get('end_date', 'N/A'), new_market.get('question', 'Market'))
 
-                            strike = await self._resolve_dynamic_strike(new_market, market_start_time)
+                            strike = await self._resolve_dynamic_price_to_beat(new_market, market_start_time)
 
                         # Ensure resolved strike is stored in market data for resolution calculation
-                        # This is critical - resolution reads from market.get('strike_price')
+                        # This is critical - resolution reads from market.get('price_to_beat')
                         if strike and strike not in ('N/A', 'None', ''):
-                            new_market['strike_price'] = strike
+                            new_market['price_to_beat'] = strike
                             # Update the stored market data
                             await self.market_manager.set_market(new_market)
                             logger.info(f"Strike stored in market data: {strike}")
@@ -870,8 +876,8 @@ class FingerBlasterCore:
                     market = await self.market_manager.get_market()
                     strike_val = None
                     if market:
-                        strike_str = str(market.get('strike_price', ''))
-                        strike_val = self._parse_strike(strike_str)
+                        strike_str = str(market.get('price_to_beat', ''))
+                        strike_val = self._parse_price_to_beat(strike_str)
                     self._emit('chart_update', prices, strike_val, 'btc')
         except Exception as e:
             logger.error(f"Error updating BTC price: {e}", exc_info=True)
@@ -974,9 +980,9 @@ class FingerBlasterCore:
             if btc_price <= 0:
                 return
             
-            # Get strike price
-            strike_str = str(market.get('strike_price', '')).replace(',', '').replace('$', '').strip()
-            strike_price = self._parse_strike(strike_str)
+            # Get price to beat
+            strike_str = str(market.get('price_to_beat', '')).replace(',', '').replace('$', '').strip()
+            strike_price = self._parse_price_to_beat(strike_str)
             if not strike_price or strike_price <= 0:
                 return
             
@@ -1028,7 +1034,7 @@ class FingerBlasterCore:
             # Generate full analytics snapshot
             snapshot = await self.analytics_engine.generate_snapshot(
                 btc_price=btc_price,
-                strike_price=strike_price,
+                price_to_beat=strike_price,
                 time_remaining_seconds=time_remaining,
                 yes_market_price=yes_price,
                 no_market_price=no_price,
@@ -1158,20 +1164,20 @@ class FingerBlasterCore:
                 return
             
             # Get and validate strike
-            strike_str = str(market.get('strike_price', '')).replace(',', '').replace('$', '').strip()
-            strike_val = self._parse_strike(strike_str)
+            strike_str = str(market.get('price_to_beat', '')).replace(',', '').replace('$', '').strip()
+            strike_val = self._parse_price_to_beat(strike_str)
             strike_source = market.get('_strike_source', 'API')
             
             # Log strike details for debugging
             logger.info(f"=== STRIKE VALIDATION FOR RESOLUTION ===")
-            logger.info(f"  Raw strike from market: {market.get('strike_price')}")
+            logger.info(f"  Raw strike from market: {market.get('price_to_beat')}")
             logger.info(f"  Cleaned strike string: {strike_str}")
             logger.info(f"  Parsed strike value: {strike_val}")
             logger.info(f"  Strike source: {strike_source}")
 
             if strike_val is None:
                 logger.error(f"!!! STRIKE UNAVAILABLE FOR RESOLUTION !!!")
-                logger.error(f"  Raw strike: {market.get('strike_price')}")
+                logger.error(f"  Raw strike: {market.get('price_to_beat')}")
                 logger.error(f"  Cleaned: {strike_str}")
                 logger.error(f"  This will cause incorrect resolution calculation!")
                 logger.warning("Strike unavailable or unparseable (%s); resolution deferred", strike_str)
@@ -1533,11 +1539,11 @@ class FingerBlasterCore:
             logger.debug(f"Error formatting end date: {e}")
             return str(end_str)
     
-    def _parse_strike(self, strike_str: str) -> Optional[float]:
-        """Parse strike price string to float.
+    def _parse_price_to_beat(self, strike_str: str) -> Optional[float]:
+        """Parse price to beat string to float.
         
         Args:
-            strike_str: Strike price string
+            strike_str: Price to beat string
             
         Returns:
             Parsed float or None if invalid
@@ -1731,10 +1737,12 @@ class FingerBlasterCore:
     async def flatten(self) -> None:
         """Flatten all positions with improved error handling."""
         self.log_msg("Action: FLATTEN")
-        
+
         # Emit flatten started callback immediately
         self._emit('flatten_started')
-        
+        # Yield control to let UI update before continuing
+        await asyncio.sleep(0)
+
         token_map = await self.market_manager.get_token_map()
         if not token_map:
             error_msg = "Error: Token map not ready."
@@ -1817,15 +1825,26 @@ class FingerBlasterCore:
     async def cancel_all(self) -> None:
         """Cancel all pending orders with improved error handling."""
         self.log_msg("Action: CANCEL ALL")
+
+        # Emit cancel started callback immediately
+        self._emit('cancel_started')
+        # Yield control to let UI update before continuing
+        await asyncio.sleep(0)
+
         try:
             success = await self.order_executor.cancel_all_orders()
             if success:
                 self.log_msg("All orders cancelled.")
+                self._emit('cancel_completed')
             else:
+                error_msg = "Cancel operation returned no success"
                 self.log_msg("Cancel operation failed.")
+                self._emit('cancel_failed', error_msg)
         except Exception as e:
-            self.log_msg(f"Cancel error: {e}")
+            error_msg = f"Cancel error: {e}"
+            self.log_msg(error_msg)
             logger.error(f"Cancel all error: {e}", exc_info=True)
+            self._emit('cancel_failed', error_msg)
     
     async def shutdown(self) -> None:
         """Handle graceful shutdown with proper cleanup.

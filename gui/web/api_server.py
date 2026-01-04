@@ -196,7 +196,7 @@ def _schedule_broadcast(event: str, data: dict) -> None:
 def on_market_update(strike: str, ends: str) -> None:
     """Handle market update from core."""
     _schedule_broadcast("market_update", {
-        "strike": strike,
+        "priceToBeat": strike,
         "ends": ends,
     })
 
@@ -271,11 +271,11 @@ def on_log(message: str) -> None:
 def on_chart_update(*args) -> None:
     """Handle chart data update from core."""
     if len(args) == 3 and args[2] == 'btc':
-        # BTC chart: (prices: List[float], strike: Optional[float], 'btc')
+        # BTC chart: (prices: List[float], price_to_beat: Optional[float], 'btc')
         prices, strike_val, _ = args
         _schedule_broadcast("btc_chart", {
             "prices": list(prices) if prices else [],
-            "strike": strike_val,
+            "priceToBeat": strike_val,
         })
     elif len(args) >= 1:
         # Probability chart: (history: List[Tuple[float, float]])
@@ -700,17 +700,17 @@ async def _gather_full_state() -> dict:
     btc_history = await core.history_manager.get_btc_history()
     yes_history = await core.history_manager.get_yes_history()
     
-    # Extract strike price - check multiple possible keys
+    # Extract price to beat - check multiple possible keys
     strike_value = None
     if market:
-        # Try different possible keys for strike price
-        strike_value = market.get('strike_price') or market.get('strike') or None
+        # Try different possible keys for price to beat
+        strike_value = market.get('price_to_beat') or market.get('strike') or None
         if strike_value:
             strike_value = str(strike_value).strip()
             if strike_value in ('N/A', 'None', '', 'Dynamic', 'Pending'):
                 strike_value = None
         if not strike_value:
-            logger.debug(f"Market exists but no strike_price found. Market keys: {list(market.keys())}")
+            logger.debug(f"Market exists but no price_to_beat found. Market keys: {list(market.keys())}")
     
     # Get account balances (async methods with timeout)
     balance = 0.0
@@ -746,7 +746,7 @@ async def _gather_full_state() -> dict:
     state = {
         "market": {
             "active": market is not None,
-            "strike": strike_value if strike_value else (None if market else None),
+            "priceToBeat": strike_value if strike_value else (None if market else None),
             "endDate": market.get('end_date') if market else None,
         },
         "prices": {

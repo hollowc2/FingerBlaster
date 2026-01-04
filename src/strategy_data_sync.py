@@ -15,7 +15,7 @@ logger = logging.getLogger("FingerBlaster.StrategyDataSync")
 class TradingData:
     """Simplified trading data structure for direct access."""
     # Market basics
-    strike: Optional[float] = None
+    price_to_beat: Optional[float] = None
     btc: Optional[float] = None
     delta: Optional[float] = None
     remain: int = 0
@@ -70,7 +70,7 @@ class StrategyDataProvider:
         self._cached_snapshot = None
         self._cached_market = None
         self._cached_btc_price = None
-        self._cached_strike = None
+        self._cached_price_to_beat = None
         self._cached_time_remaining = None
         self._cached_prior_outcomes = None
     
@@ -84,14 +84,14 @@ class StrategyDataProvider:
             snapshot: AnalyticsSnapshot
             market: Market dict
             btc_price: Current BTC price
-            strike: Strike price (float)
+            price_to_beat: Price to beat (float)
             time_remaining: Seconds remaining
             prior_outcomes: List of prior outcomes
         """
         self._cached_snapshot = snapshot
         self._cached_market = market
         self._cached_btc_price = btc_price
-        self._cached_strike = strike
+        self._cached_price_to_beat = strike
         self._cached_time_remaining = time_remaining
         self._cached_prior_outcomes = prior_outcomes or []
     
@@ -108,8 +108,8 @@ class StrategyDataProvider:
         
         # Calculate delta
         delta = None
-        if self._cached_btc_price and self._cached_strike:
-            delta = self._cached_btc_price - self._cached_strike
+        if self._cached_btc_price and self._cached_price_to_beat:
+            delta = self._cached_btc_price - self._cached_price_to_beat
         
         # Convert edge enum to string
         def edge_to_str(edge):
@@ -120,7 +120,7 @@ class StrategyDataProvider:
             return str(edge)
         
         return TradingData(
-            strike=self._cached_strike,
+            price_to_beat=self._cached_price_to_beat,
             btc=self._cached_btc_price,
             delta=delta,
             remain=self._cached_time_remaining or 0,

@@ -155,7 +155,7 @@ class DataCard(Container):
 class TradingTUI(App):
     time_remaining = reactive(0)
     btc_price = reactive(0.0)
-    strike_price = reactive("0.0")
+    price_to_beat = reactive("0.0")
     delta_val = reactive(0.0)
     sigma_label = reactive("0.0σ")
     market_name = reactive("FINGER BLASTER")
@@ -192,7 +192,7 @@ class TradingTUI(App):
         height: auto;
     }
 
-    #strike-card {
+    #price-to-beat-card {
         border: round #262626;
         background: #161616;
         height: auto;
@@ -201,7 +201,7 @@ class TradingTUI(App):
         margin-bottom: 1;
         align: center middle;
     }
-    #strike-price-row { align: center middle; width: 100%; height: 4; }
+    #price-to-beat-row { align: center middle; width: 100%; height: 4; }
     .price-column { width: 1fr; height: 100%; }
     .price-label { color: $text-muted; text-align: center; width: 100%; }
     .price-value { color: #EAB308; text-style: bold; text-align: center; width: 100%; height: 2; }
@@ -269,11 +269,11 @@ class TradingTUI(App):
         yield Header(show_clock=False)
         
         with Vertical(id="app-container"):
-            with Vertical(id="strike-card"):
-                with Horizontal(id="strike-price-row"):
+            with Vertical(id="price-to-beat-card"):
+                with Horizontal(id="price-to-beat-row"):
                     with Vertical(classes="price-column"):
-                        yield Static("STRIKE PRICE", classes="price-label")
-                        yield Static("$0.00", id="strike-price-value", classes="price-value")
+                        yield Static("PRICE TO BEAT", classes="price-label")
+                        yield Static("$0.00", id="price-to-beat-value", classes="price-value")
                     with Vertical(classes="price-column"):
                         yield Static("Bitcoin", classes="price-label")
                         yield Static(f"${self.btc_price:,.2f}", id="btc-price-value", classes="price-value")
@@ -312,7 +312,10 @@ class TradingTUI(App):
             self.core.register_callback('flatten_started', self._async_callback_wrapper(self._on_flatten_started))
             self.core.register_callback('flatten_completed', self._async_callback_wrapper(self._on_flatten_completed))
             self.core.register_callback('flatten_failed', self._async_callback_wrapper(self._on_flatten_failed))
-            
+            self.core.register_callback('cancel_started', self._async_callback_wrapper(self._on_cancel_started))
+            self.core.register_callback('cancel_completed', self._async_callback_wrapper(self._on_cancel_completed))
+            self.core.register_callback('cancel_failed', self._async_callback_wrapper(self._on_cancel_failed))
+
             await self.core.start_rtds()
             # Wait for RTDS to collect some price history before looking for markets
             # This allows Chainlink price data to be available for dynamic strike resolution
@@ -339,7 +342,7 @@ class TradingTUI(App):
             await self.core.update_countdown()
             await self.core.update_analytics()
             await self._update_market_name_from_data()
-            if not self.strike_price or self.strike_price in ('0.0', 'N/A'):
+            if not self.price_to_beat or self.price_to_beat in ('0.0', 'N/A'):
                 await self._update_strike_from_market_data()
 
     async def _update_market_status(self) -> None:
@@ -353,9 +356,9 @@ class TradingTUI(App):
         if not self.core: return
         market = await self.core.market_manager.get_market()
         if market:
-            strike = market.get('strike_price')
+            strike = market.get('price_to_beat')
             if strike and strike not in ('N/A', 'None'):
-                self.strike_price = str(strike)
+                self.price_to_beat = str(strike)
 
     async def _update_market_name_from_data(self) -> None:
         if not self.core: return
@@ -375,18 +378,18 @@ class TradingTUI(App):
                     self.query_one("#btc-price-value", Static).update(f"${self.btc_price:,.2f}")
                 except: pass
             
-            # Refresh strike price
-            if self.strike_price and self.strike_price not in ('0.0', 'N/A', 'None'):
+            # Refresh price to beat
+            if self.price_to_beat and self.price_to_beat not in ('0.0', 'N/A', 'None'):
                 try:
-                    strike_float = float(str(self.strike_price).replace('$', '').replace(',', ''))
+                    strike_float = float(str(self.price_to_beat).replace('$', '').replace(',', ''))
                     strike_formatted = f"${strike_float:,.2f}"
-                    self.query_one("#strike-price-value", Static).update(strike_formatted)
+                    self.query_one("#price-to-beat-value", Static).update(strike_formatted)
                 except: pass
             
             # Refresh delta if both values are available
-            if self.btc_price > 0 and self.strike_price and self.strike_price not in ('0.0', 'N/A'):
+            if self.btc_price > 0 and self.price_to_beat and self.price_to_beat not in ('0.0', 'N/A'):
                 try:
-                    strike = float(str(self.strike_price).replace('$', '').replace(',', ''))
+                    strike = float(str(self.price_to_beat).replace('$', '').replace(',', ''))
                     self.delta_val = self.btc_price - strike
                     sign = "+" if self.delta_val >= 0 else ""
                     self.query_one("#metric-delta", MetricBox).query_one(".metric-value", Static).update(f"{sign}${self.delta_val:,.2f}")
@@ -403,10 +406,10 @@ class TradingTUI(App):
         except Exception as e:
             logger.debug(f"Error updating BTC price widget: {e}")
         
-        # Update delta if strike price is available
-        if self.strike_price and self.strike_price not in ('0.0', 'N/A'):
+        # Update delta if price to beat is available
+        if self.price_to_beat and self.price_to_beat not in ('0.0', 'N/A'):
             try:
-                strike = float(str(self.strike_price).replace('$', '').replace(',', ''))
+                strike = float(str(self.price_to_beat).replace('$', '').replace(',', ''))
                 self.delta_val = price - strike
                 sign = "+" if self.delta_val >= 0 else ""
                 delta_widget = self.query_one("#metric-delta", MetricBox)
@@ -415,10 +418,10 @@ class TradingTUI(App):
             except Exception as e:
                 logger.debug(f"Error updating delta in watch_btc_price: {e}")
 
-    def watch_strike_price(self, strike: str) -> None:
-        """Automatically update strike price widget when reactive property changes."""
+    def watch_price_to_beat(self, strike: str) -> None:
+        """Automatically update price to beat widget when reactive property changes."""
         try:
-            strike_widget = self.query_one("#strike-price-value", Static)
+            strike_widget = self.query_one("#price-to-beat-value", Static)
             if strike and strike not in ('0.0', 'N/A', 'None'):
                 # Try to format as currency
                 try:
@@ -430,7 +433,7 @@ class TradingTUI(App):
             else:
                 strike_widget.update("N/A")
         except Exception as e:
-            logger.debug(f"Error updating strike price widget: {e}")
+            logger.debug(f"Error updating price to beat widget: {e}")
         
         # Recalculate delta if BTC price is available
         if self.btc_price > 0:
@@ -442,7 +445,7 @@ class TradingTUI(App):
                 delta_widget.query_one(".metric-value", Static).update(f"{sign}${self.delta_val:,.2f}")
                 self._update_delta_border(self.delta_val)
             except Exception as e:
-                logger.debug(f"Error updating delta in watch_strike_price: {e}")
+                logger.debug(f"Error updating delta in watch_price_to_beat: {e}")
 
     def watch_market_name(self, market_name: str) -> None:
         """Automatically update title when market_name changes."""
@@ -592,7 +595,7 @@ class TradingTUI(App):
         self._update_cards()
 
     def _on_market_update(self, strike: str, ends: str, market_name: str = "Market") -> None:
-        self.strike_price = strike
+        self.price_to_beat = strike
         self.market_name = market_name.upper()
         self.title = self.market_name
 
@@ -637,20 +640,20 @@ class TradingTUI(App):
         except Exception as e:
             logger.debug(f"Error updating cards: {e}")
 
-    async def action_place_order(self, side: str) -> None:
+    def action_place_order(self, side: str) -> None:
         if self.core:
-            self.notify(f"Submitting {side} order...")
-            await self.core.place_order(side)
+            # Run order in background so UI can update immediately
+            self.run_worker(self.core.place_order(side), exclusive=False)
 
-    async def action_flatten(self) -> None:
+    def action_flatten(self) -> None:
         if self.core:
-            self.notify("FLATTENING...", severity="warning")
-            await self.core.flatten()
+            # Run flatten in background so UI can update immediately
+            self.run_worker(self.core.flatten(), exclusive=False)
 
-    async def action_cancel_orders(self) -> None:
+    def action_cancel_orders(self) -> None:
         if self.core:
-            await self.core.cancel_all()
-            self.notify("Orders Cancelled")
+            # Run cancel in background so UI can update immediately
+            self.run_worker(self.core.cancel_all(), exclusive=False)
     
     async def action_toggle_positions(self) -> None:
         """Toggle position manager window."""
@@ -669,16 +672,31 @@ class TradingTUI(App):
             await self.push_screen(self._position_manager)
             self._position_manager_open = True
 
-    def _on_order_submitted(self, side: str, size: float, price: float) -> None: pass
+    def _on_order_submitted(self, side: str, size: float, price: float) -> None:
+        self.notify(f"SUBMITTING: {side} ${size:.2f}...", severity="warning")
+
     def _on_order_filled(self, side: str, size: float, price: float, order_id: str) -> None:
-        self.notify(f"FILLED: {side} @ ${price:.2f}", severity="success")
+        self.notify(f"FILLED: {side} ${size:.2f} @ {price:.2f}", severity="success")
     def _on_order_failed(self, side: str, size: float, error: str) -> None:
         self.notify(f"FAILED: {error}", severity="error")
-    def _on_flatten_started(self) -> None: pass
+    def _on_flatten_started(self) -> None:
+        self.notify("FLATTENING positions...", severity="warning")
+
     def _on_flatten_completed(self, orders: int) -> None:
-        self.notify(f"Flattened {orders} orders", severity="success")
+        self.notify(f"FLATTENED: {orders} orders closed", severity="success")
+
     def _on_flatten_failed(self, error: str) -> None:
-        self.notify(f"Flatten Failed: {error}", severity="error")
+        self.notify(f"FLATTEN FAILED: {error}", severity="error")
+
+    def _on_cancel_started(self) -> None:
+        self.notify("CANCELLING orders...", severity="warning")
+
+    def _on_cancel_completed(self) -> None:
+        self.notify("CANCELLED: All orders cancelled", severity="success")
+
+    def _on_cancel_failed(self, error: str) -> None:
+        self.notify(f"CANCEL FAILED: {error}", severity="error")
+
     def _on_resolution(self, resolution: Optional[str]) -> None:
         if resolution: self.notify(f"RESOLVED: {resolution}", timeout=10)
 
@@ -693,7 +711,7 @@ class TradingTUI(App):
     async def on_unmount(self) -> None:
         self._stop_flash_timer()
         if self._position_manager:
-            self._position_manager.exit()
+            self._position_manager.dismiss()
             self._position_manager = None
         if self.core: await self.core.shutdown()
 

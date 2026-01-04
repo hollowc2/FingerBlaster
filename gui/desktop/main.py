@@ -93,7 +93,7 @@ def run_async_task(coro):
 
 class UIUpdateSignals(QObject):
     """Signals for thread-safe UI updates."""
-    market_strike = pyqtSignal(str)
+    market_price_to_beat = pyqtSignal(str)
     market_ends = pyqtSignal(str)
     btc_price = pyqtSignal(float)
     prices = pyqtSignal(float, float, str, str)
@@ -156,8 +156,8 @@ class FingerBlasterPyQtApp(QMainWindow):
                 market = await self.core.market_manager.get_market()
                 strike_val = None
                 if market:
-                    strike_str = str(market.get('strike_price', ''))
-                    strike_val = self.core._parse_strike(strike_str)
+                    strike_str = str(market.get('price_to_beat', ''))
+                    strike_val = self.core._parse_price_to_beat(strike_str)
                 self.core._emit('chart_update', prices, strike_val, 'btc')
         except Exception as e:
             logger.error(f"Error forcing chart updates: {e}", exc_info=True)
@@ -423,7 +423,7 @@ class FingerBlasterPyQtApp(QMainWindow):
         """Setup signal connections after UI is initialized."""
         # Use QueuedConnection for thread safety (default is AutoConnection which should work, but explicit is better)
         connection_type = Qt.ConnectionType.QueuedConnection
-        self.signals.market_strike.connect(self.market_panel.update_strike, connection_type)
+        self.signals.market_price_to_beat.connect(self.market_panel.update_price_to_beat, connection_type)
         self.signals.market_ends.connect(self.market_panel.update_ends, connection_type)
         self.signals.btc_price.connect(self.market_panel.update_btc_price, connection_type)
         self.signals.prices.connect(self.price_panel.update_prices, connection_type)
@@ -464,7 +464,7 @@ class FingerBlasterPyQtApp(QMainWindow):
     # Callback handlers - synchronous wrappers that emit signals for thread-safe UI updates
     def _on_market_update_sync(self, strike: str, ends: str) -> None:
         """Handle market update from core."""
-        self.signals.market_strike.emit(strike)
+        self.signals.market_price_to_beat.emit(strike)
         self.signals.market_ends.emit(ends)
     
     def _on_btc_price_update_sync(self, price: float) -> None:

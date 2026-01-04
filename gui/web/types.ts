@@ -17,7 +17,7 @@ export interface Position {
 
 export interface MarketData {
   spotPrice: number;
-  strikePrice: number;
+  priceToBeat: number;
   change24h: number;
   itmProb: number;
   basisPoints: number;
@@ -32,7 +32,7 @@ export interface MarketData {
 
 export interface MarketInfo {
   active: boolean;
-  strike: string | null;
+  priceToBeat: string | null;
   endDate: string | null;
 }
 
@@ -108,8 +108,8 @@ export type WebSocketEvent =
   | { event: 'analytics'; data: AnalyticsData }
   | { event: 'prior_outcomes'; data: { outcomes: string[] } }
   | { event: 'resolution'; data: { resolution: string | null } }
-  | { event: 'market_update'; data: { strike: string; ends: string } }
-  | { event: 'btc_chart'; data: { prices: number[]; strike: number | null } }
+  | { event: 'market_update'; data: { priceToBeat: string; ends: string } }
+  | { event: 'btc_chart'; data: { prices: number[]; priceToBeat: number | null } }
   | { event: 'probability_chart'; data: { data: ChartPoint[] } }
   | { event: 'log'; data: { message: string } }
   | { event: 'pong' };
@@ -124,7 +124,7 @@ export interface FingerBlasterState {
   
   // Market
   marketActive: boolean;
-  strike: string;
+  priceToBeat: string;
   endDate: string | null;
   
   // Prices (0-100 scale for display)

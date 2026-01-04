@@ -56,19 +56,19 @@ const AppContent: React.FC = () => {
     };
   }, [fb.btcHistory, fb.btcPrice]);
 
-  // Parse strike price for display
+  // Parse price to beat for display
   const strikeValue = useMemo(() => {
-    const parsed = parseFloat(fb.strike.replace(/,/g, ''));
+    const parsed = parseFloat(fb.priceToBeat.replace(/,/g, ''));
     return isNaN(parsed) ? null : parsed;
-  }, [fb.strike]);
+  }, [fb.priceToBeat]);
 
-  // Calculate BTC delta from strike
+  // Calculate BTC delta from price to beat
   const btcDelta = useMemo(() => {
     if (!strikeValue || !fb.btcPrice) return null;
     return fb.btcPrice - strikeValue;
   }, [fb.btcPrice, strikeValue]);
 
-  // Calculate strike line Y position in chart coordinates
+  // Calculate price to beat line Y position in chart coordinates
   const strikeLineY = useMemo(() => {
     if (!strikeValue || minPrice === maxPrice) return null;
     const y = 100 - ((strikeValue - minPrice) / (maxPrice - minPrice || 1)) * 100;
@@ -182,7 +182,7 @@ const AppContent: React.FC = () => {
             <StatCard 
               label="BTC Price" 
               value={fb.btcPrice ? `$${fb.btcPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '--'}
-              subValue={btcDelta !== null ? `${btcDelta >= 0 ? '+' : ''}${btcDelta.toFixed(0)} from strike` : ''}
+              subValue={btcDelta !== null ? `${btcDelta >= 0 ? '+' : ''}${btcDelta.toFixed(0)} from price to beat` : ''}
               subValueColor={btcDelta !== null && btcDelta >= 0 ? 'text-primary' : 'text-accent-red'}
               trend={btcDelta !== null && btcDelta >= 0 ? 'up' : 'down'}
               icon="show_chart"
@@ -190,9 +190,9 @@ const AppContent: React.FC = () => {
               flashKey={btcPriceFlashKey}
             />
             <div className="bg-surface-dark border border-white/5 p-4 rounded-lg">
-              <p className="text-gray-400 text-xs font-medium uppercase tracking-wider mb-1">Strike Price</p>
+              <p className="text-gray-400 text-xs font-medium uppercase tracking-wider mb-1">Price to Beat</p>
               <p className="text-2xl font-bold text-white tracking-tight">
-                {fb.strike && fb.strike !== '--' && fb.strike !== 'N/A' ? `$${fb.strike}` : '--'}
+                {fb.priceToBeat && fb.priceToBeat !== '--' && fb.priceToBeat !== 'N/A' ? `$${fb.priceToBeat}` : '--'}
               </p>
               <div className="w-full bg-white/10 h-1 mt-2 rounded-full overflow-hidden">
                 <div 
@@ -322,7 +322,7 @@ const AppContent: React.FC = () => {
                   />
                 )}
                 
-                {/* Strike Price Line - Always Bright Yellow Horizontal Line */}
+                {/* Price to Beat Line - Always Bright Yellow Horizontal Line */}
                 {strikeLineY !== null && (
                   <line 
                     x1="0" 
@@ -350,7 +350,7 @@ const AppContent: React.FC = () => {
 
               {strikeValue && (
                 <div className="absolute top-1/2 right-4 text-[10px] text-white/40 -mt-3 bg-surface-dark px-1 font-bold z-20 border border-white/10 rounded">
-                  STRIKE: ${strikeValue.toLocaleString()}
+                  PRICE TO BEAT: ${strikeValue.toLocaleString()}
                 </div>
               )}
             </div>
