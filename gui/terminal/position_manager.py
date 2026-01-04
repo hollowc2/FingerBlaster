@@ -339,14 +339,46 @@ class PositionManagerApp(ModalScreen):
         """Close a position for the given side."""
         try:
             self.notify(f"Closing {side} position...", severity="warning")
+            
+            # Get the position before closing to verify it exists
+            position_to_close = None
+            for pos in self.positions:
+                if pos.side == side:
+                    position_to_close = pos
+                    break
+            
+            if not position_to_close:
+                self.notify(f"No {side} position found to close", severity="warning")
+                return
+            
+            # Close the position
             await self.core.close_position(side)
-            # Refresh positions after closing
+            
+            # Immediately remove from local list for instant UI feedback
+            self.positions = [p for p in self.positions if p.side != side]
+            await self._update_table()
+            
+            # Wait for API to propagate and refresh multiple times
+            # API can take a few seconds to update, so we'll refresh with retries
+            for attempt in range(3):
+                await asyncio.sleep(1.0)  # Wait 1 second between attempts
+                await self._update_positions()
+                
+                # Check if position is actually gone
+                still_open = any(p.side == side for p in self.positions)
+                if not still_open:
+                    break
+            
+            # Final check
             await asyncio.sleep(0.5)
             await self._update_positions()
+            
             self.notify(f"{side} position closed", severity="success")
         except Exception as e:
             logger.error(f"Error closing position: {e}", exc_info=True)
             self.notify(f"Error closing position: {e}", severity="error")
+            # Still refresh to show current state
+            await self._update_positions()
 
 
 def create_position_manager_app(core: FingerBlasterCore) -> PositionManagerApp:
