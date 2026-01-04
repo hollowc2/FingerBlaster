@@ -170,12 +170,12 @@ class AnalyticsEngine:
         time_to_expiry_seconds: float,
         volatility: Optional[float] = None
     ) -> Tuple[Optional[float], Optional[float]]:
-        """Calculate fair value of binary YES/NO contract using Black-Scholes.
+        """Calculate fair value of binary Up/Down contract using Black-Scholes.
         
-        For a cash-or-nothing binary call (YES pays $1 if S > K):
+        For a cash-or-nothing binary call (Up pays $1 if S > K):
         FV_YES = N(d2) where d2 = (ln(S/K) + (r - σ²/2)T) / (σ√T)
         
-        For binary put (NO pays $1 if S < K):
+        For binary put (Down pays $1 if S < K):
         FV_NO = N(-d2) = 1 - N(d2)
         
         Args:
@@ -388,12 +388,12 @@ class AnalyticsEngine:
         """Check if order book has no data.
 
         Args:
-            order_book: Raw order book data {YES/NO: {bids/asks: {price: size}}}
+            order_book: Raw order book data {Up/Down: {bids/asks: {price: size}}}
 
         Returns:
             True if order book is completely empty (no bids/asks for either side)
         """
-        for side in ['YES', 'NO']:
+        for side in ['Up', 'Down']:
             if side in order_book:
                 bids = order_book[side].get('bids', {})
                 asks = order_book[side].get('asks', {})
@@ -408,7 +408,7 @@ class AnalyticsEngine:
         """Calculate liquidity depth at top of book.
 
         Args:
-            order_book: Raw order book data {YES/NO: {bids/asks: {price: size}}}
+            order_book: Raw order book data {Up/Down: {bids/asks: {price: size}}}
 
         Returns:
             Dictionary with depth in dollars at top of book for each side
@@ -417,16 +417,16 @@ class AnalyticsEngine:
         # Check if order book is empty (WebSocket not yet connected)
         if self._is_order_book_empty(order_book):
             return {
-                'YES': {'bid_depth': None, 'ask_depth': None},
-                'NO': {'bid_depth': None, 'ask_depth': None}
+                'Up': {'bid_depth': None, 'ask_depth': None},
+                'Down': {'bid_depth': None, 'ask_depth': None}
             }
 
         result = {
-            'YES': {'bid_depth': 0.0, 'ask_depth': 0.0},
-            'NO': {'bid_depth': 0.0, 'ask_depth': 0.0}
+            'Up': {'bid_depth': 0.0, 'ask_depth': 0.0},
+            'Down': {'bid_depth': 0.0, 'ask_depth': 0.0}
         }
 
-        for side in ['YES', 'NO']:
+        for side in ['Up', 'Down']:
             if side not in order_book:
                 continue
 
@@ -462,12 +462,12 @@ class AnalyticsEngine:
         """Calculate unrealized PnL for positions.
         
         Args:
-            yes_position: Number of YES shares
-            no_position: Number of NO shares
-            avg_entry_yes: Average entry price for YES
-            avg_entry_no: Average entry price for NO
-            current_yes_price: Current mid price for YES
-            current_no_price: Current mid price for NO
+            yes_position: Number of Up shares
+            no_position: Number of Down shares
+            avg_entry_yes: Average entry price for Up
+            avg_entry_no: Average entry price for Down
+            current_yes_price: Current mid price for Up
+            current_no_price: Current mid price for Down
             
         Returns:
             Tuple of (pnl_yes, pnl_no, total_pnl, pnl_percentage)
@@ -479,14 +479,14 @@ class AnalyticsEngine:
         pnl_no = 0.0
         total_cost = 0.0
         
-        # YES position PnL - only calculate if position is above threshold
+        # Up position PnL - only calculate if position is above threshold
         if yes_position > MIN_BALANCE_THRESHOLD and avg_entry_yes is not None and avg_entry_yes > 0:
             cost_yes = yes_position * avg_entry_yes
             value_yes = yes_position * current_yes_price
             pnl_yes = value_yes - cost_yes
             total_cost += cost_yes
         
-        # NO position PnL - only calculate if position is above threshold
+        # Down position PnL - only calculate if position is above threshold
         if no_position > MIN_BALANCE_THRESHOLD and avg_entry_no is not None and avg_entry_no > 0:
             cost_no = no_position * avg_entry_no
             value_no = no_position * current_no_price
@@ -606,7 +606,7 @@ class AnalyticsEngine:
         """Analyze prior outcomes to detect market regime.
         
         Args:
-            prior_outcomes: List of 'YES' or 'NO' outcomes
+            prior_outcomes: List of 'Up' or 'Down' outcomes
             
         Returns:
             Tuple of (regime_direction, strength_percentage)
@@ -614,7 +614,7 @@ class AnalyticsEngine:
         if not prior_outcomes:
             return "", 0.0
         
-        yes_count = sum(1 for o in prior_outcomes if o.upper() == 'YES')
+        yes_count = sum(1 for o in prior_outcomes if o == 'Up' or (isinstance(o, str) and o.upper() in ('UP', 'YES')))
         total = len(prior_outcomes)
         
         if total == 0:
@@ -708,13 +708,13 @@ class AnalyticsEngine:
             btc_price: Current BTC price
             price_to_beat: Market price to beat
             time_remaining_seconds: Seconds until expiry
-            yes_market_price: Current YES market price
-            no_market_price: Current NO market price
+            yes_market_price: Current Up market price
+            no_market_price: Current Down market price
             order_book: Full order book data
-            yes_position: YES position size
-            no_position: NO position size
-            avg_entry_yes: Average entry price for YES
-            avg_entry_no: Average entry price for NO
+            yes_position: Up position size
+            no_position: Down position size
+            avg_entry_yes: Average entry price for Up
+            avg_entry_no: Average entry price for Down
             prior_outcomes: List of prior outcome strings
             order_size_usd: Order size for slippage calculation
             
@@ -761,8 +761,8 @@ class AnalyticsEngine:
         )
         
         # 8. Slippage estimation
-        yes_asks = order_book.get('YES', {}).get('asks', {})
-        no_asks = order_book.get('NO', {}).get('asks', {})
+        yes_asks = order_book.get('Up', {}).get('asks', {})
+        no_asks = order_book.get('Down', {}).get('asks', {})
         
         _, slippage_yes = self.estimate_slippage(order_size_usd, yes_asks, is_buy=True)
         _, slippage_no = self.estimate_slippage(order_size_usd, no_asks, is_buy=True)
@@ -794,10 +794,10 @@ class AnalyticsEngine:
             sigma_label=sigma_label,
             
             # Liquidity
-            yes_bid_depth=liquidity['YES']['bid_depth'],
-            yes_ask_depth=liquidity['YES']['ask_depth'],
-            no_bid_depth=liquidity['NO']['bid_depth'],
-            no_ask_depth=liquidity['NO']['ask_depth'],
+            yes_bid_depth=liquidity['Up']['bid_depth'],
+            yes_ask_depth=liquidity['Up']['ask_depth'],
+            no_bid_depth=liquidity['Down']['bid_depth'],
+            no_ask_depth=liquidity['Down']['ask_depth'],
             
             # PnL
             unrealized_pnl_yes=pnl_yes,

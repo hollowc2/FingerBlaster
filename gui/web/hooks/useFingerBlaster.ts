@@ -370,7 +370,7 @@ export function useFingerBlaster(options: UseFingerBlasterOptions = {}): UseFing
   }, []); // Empty deps - only run once on mount
 
   // API Actions
-  const placeOrder = useCallback(async (side: 'YES' | 'NO', size?: number) => {
+  const placeOrder = useCallback(async (side: 'Up' | 'Down', size?: number) => {
     const response = await fetchWithRetry(
       `${API_BASE}/api/order`,
       {

@@ -44,7 +44,7 @@ logger = logging.getLogger("FingerBlaster.PositionManager")
 @dataclass
 class Position:
     """Represents a single position."""
-    side: str  # 'YES' or 'NO'
+    side: str  # 'Up' or 'Down'
     shares: float
     entry_price: Optional[float]
     current_price: float
@@ -108,7 +108,7 @@ class PositionManagerApp(ModalScreen):
     """
     
     BINDINGS = [
-        Binding("q", "quit", "Close", priority=True),
+        Binding("p", "quit", "Close", priority=True),
         Binding("escape", "quit", "Close", priority=True),
         Binding("r", "refresh", "Refresh", priority=True),
         Binding("enter", "close_selected", "Close Position", priority=True),
@@ -155,74 +155,79 @@ class PositionManagerApp(ModalScreen):
         await self._update_positions()
     
     async def _update_positions(self) -> None:
-        """Update position data from core."""
+        """Update position data from Polymarket Data API."""
         try:
-            # Get token map
-            token_map = await self.core.market_manager.get_token_map()
-            if not token_map:
+            # Get current market's token IDs for filtering
+            market = await self.core.market_manager.get_market()
+            if not market:
                 self._clear_table()
                 return
-            
-            # Get current prices
-            prices = await self.core.market_manager.calculate_mid_price()
-            yes_price, no_price, best_bid, best_ask = prices
-            
-            # Get positions
+
+            token_map = market.get('token_map', {})
+            current_token_ids = set(token_map.values())
+
+            if not current_token_ids:
+                self._clear_table()
+                return
+
+            # Fetch ALL positions (no API-level filter since condition_id not available)
+            api_positions = await self.core.connector.get_positions(
+                size_threshold=0.1
+            )
+
+            if not api_positions:
+                self._clear_table()
+                return
+
+            # Convert API response to Position objects, filtering by current market token IDs
             positions: List[Position] = []
-            
-            # YES position
-            yes_token_id = token_map.get('YES')
-            if yes_token_id:
-                yes_shares = await self.core.connector.get_token_balance(yes_token_id)
-                if yes_shares > 0.1:  # MIN_BALANCE_THRESHOLD
-                    entry_price = self.core.avg_entry_price_yes
-                    current_price = yes_price
-                    market_value = yes_shares * current_price
-                    pnl = 0.0
-                    pnl_percent = 0.0
-                    
-                    if entry_price:
-                        pnl = (current_price - entry_price) * yes_shares
-                        pnl_percent = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0.0
-                    
-                    positions.append(Position(
-                        side='YES',
-                        shares=yes_shares,
-                        entry_price=entry_price,
-                        current_price=current_price,
-                        market_value=market_value,
-                        pnl=pnl,
-                        pnl_percent=pnl_percent
-                    ))
-            
-            # NO position
-            no_token_id = token_map.get('NO')
-            if no_token_id:
-                no_shares = await self.core.connector.get_token_balance(no_token_id)
-                if no_shares > 0.1:  # MIN_BALANCE_THRESHOLD
-                    entry_price = self.core.avg_entry_price_no
-                    current_price = no_price
-                    market_value = no_shares * current_price
-                    pnl = 0.0
-                    pnl_percent = 0.0
-                    
-                    if entry_price:
-                        pnl = (current_price - entry_price) * no_shares
-                        pnl_percent = ((current_price - entry_price) / entry_price * 100) if entry_price > 0 else 0.0
-                    
-                    positions.append(Position(
-                        side='NO',
-                        shares=no_shares,
-                        entry_price=entry_price,
-                        current_price=current_price,
-                        market_value=market_value,
-                        pnl=pnl,
-                        pnl_percent=pnl_percent
-                    ))
-            
+            for pos in api_positions:
+                # Filter: only show positions from current market
+                asset_token = pos.get('asset', '')
+                if asset_token not in current_token_ids:
+                    continue
+
+                # Determine side from outcome field
+                # API may return "YES"/"NO" or "Up"/"Down", normalize to "Up"/"Down"
+                outcome = pos.get('outcome', '')
+                if not outcome:
+                    continue
+                
+                # Normalize to title case and map legacy YES/NO to Up/Down
+                outcome_normalized = outcome[0].upper() + outcome[1:].lower() if len(outcome) > 1 else outcome.upper()
+                
+                # Map YES/NO to Up/Down for backward compatibility
+                if outcome_normalized in ('Up', 'Yes') or outcome_normalized.upper() in ('YES', 'UP'):
+                    side = 'Up'
+                elif outcome_normalized in ('Down', 'No') or outcome_normalized.upper() in ('NO', 'DOWN'):
+                    side = 'Down'
+                else:
+                    # Skip positions with unrecognized outcome
+                    continue
+
+                shares = float(pos.get('size', 0))
+                if shares <= 0.1:
+                    continue
+
+                entry_price = float(pos.get('avgPrice', 0)) if pos.get('avgPrice') else None
+                current_price = float(pos.get('curPrice', 0))
+                market_value = float(pos.get('currentValue', 0))
+                pnl = float(pos.get('cashPnl', 0))
+                pnl_percent = float(pos.get('percentPnl', 0))
+
+                positions.append(Position(
+                    side=side,
+                    shares=shares,
+                    entry_price=entry_price,
+                    current_price=current_price,
+                    market_value=market_value,
+                    pnl=pnl,
+                    pnl_percent=pnl_percent
+                ))
+
             self.positions = positions
             await self._update_table()
-            
+
         except Exception as e:
             logger.error(f"Error updating positions: {e}", exc_info=True)
     
@@ -315,11 +320,20 @@ class PositionManagerApp(ModalScreen):
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection - close position when Enter is pressed on a row."""
         row_key = event.row_key
-        if row_key and row_key.startswith("position-"):
+        if row_key and str(row_key.value).startswith("position-"):
             # Extract side from row key
-            side = row_key.replace("position-", "")
+            side = str(row_key.value).replace("position-", "")
             # Close the position
             asyncio.create_task(self._close_position(side))
+
+    def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+        """Handle cell click - close position when Action column is clicked."""
+        # Check if the Action column (index 7) was clicked
+        if event.coordinate.column == 7:
+            row_key = event.cell_key.row_key
+            if row_key and str(row_key.value).startswith("position-"):
+                side = str(row_key.value).replace("position-", "")
+                asyncio.create_task(self._close_position(side))
     
     async def _close_position(self, side: str) -> None:
         """Close a position for the given side."""

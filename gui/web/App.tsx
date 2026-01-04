@@ -99,9 +99,9 @@ const AppContent: React.FC = () => {
     return fb.priorOutcomes.slice(0, 10).map((outcome, idx) => (
       <span 
         key={idx} 
-        className={outcome === 'YES' ? 'text-primary' : 'text-accent-red'}
+        className={outcome === 'Up' ? 'text-primary' : 'text-accent-red'}
       >
-        {outcome === 'YES' ? '▲' : '▼'}
+        {outcome === 'Up' ? '▲' : '▼'}
       </span>
     ));
   }, [fb.priorOutcomes]);
@@ -114,13 +114,13 @@ const AppContent: React.FC = () => {
       {/* Resolution Overlay */}
       {fb.resolution && (
         <div className={`fixed inset-0 z-[100] flex items-center justify-center transition-opacity duration-300 ${
-          fb.resolution === 'YES' ? 'bg-primary' : 'bg-accent-red'
+          fb.resolution === 'Up' ? 'bg-primary' : 'bg-accent-red'
         }`}>
           <div className="text-center">
-            <h1 className={`text-9xl font-black ${fb.resolution === 'YES' ? 'text-black' : 'text-white'}`}>
+            <h1 className={`text-9xl font-black ${fb.resolution === 'Up' ? 'text-black' : 'text-white'}`}>
               {fb.resolution}
             </h1>
-            <p className={`text-2xl font-bold mt-4 ${fb.resolution === 'YES' ? 'text-black/70' : 'text-white/70'}`}>
+            <p className={`text-2xl font-bold mt-4 ${fb.resolution === 'Up' ? 'text-black/70' : 'text-white/70'}`}>
               MARKET RESOLVED
             </p>
           </div>
@@ -413,7 +413,7 @@ const AppContent: React.FC = () => {
                 <div className="p-4 border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer group">
                   <div className="flex justify-between items-start mb-2">
                     <span className="font-bold text-sm text-primary">
-                      YES <span className="text-gray-400 font-normal">@ {fb.avgEntryYes ? (fb.avgEntryYes * 100).toFixed(0) : '--'}¢</span>
+                      Up <span className="text-gray-400 font-normal">@ {fb.avgEntryYes ? (fb.avgEntryYes * 100).toFixed(0) : '--'}¢</span>
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
@@ -433,7 +433,7 @@ const AppContent: React.FC = () => {
                 <div className="p-4 border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer group">
                   <div className="flex justify-between items-start mb-2">
                     <span className="font-bold text-sm text-accent-red">
-                      NO <span className="text-gray-400 font-normal">@ {fb.avgEntryNo ? (fb.avgEntryNo * 100).toFixed(0) : '--'}¢</span>
+                      Down <span className="text-gray-400 font-normal">@ {fb.avgEntryNo ? (fb.avgEntryNo * 100).toFixed(0) : '--'}¢</span>
                     </span>
                   </div>
                   <div className="flex justify-between items-center">

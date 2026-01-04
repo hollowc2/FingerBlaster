@@ -8,7 +8,7 @@
 
 export interface Position {
   id: string;
-  side: 'YES' | 'NO';
+  side: 'Up' | 'Down';
   price: number;
   shares: number;
   pnl: number;
@@ -169,7 +169,7 @@ export interface FingerBlasterState {
 }
 
 export interface FingerBlasterActions {
-  placeOrder: (side: 'YES' | 'NO', size?: number) => Promise<void>;
+  placeOrder: (side: 'Up' | 'Down', size?: number) => Promise<void>;
   flatten: () => Promise<void>;
   cancelAll: () => Promise<void>;
   sizeUp: () => Promise<void>;

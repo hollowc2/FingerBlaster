@@ -173,8 +173,8 @@ class TradingTUI(App):
     _position_manager_open: bool = False
 
     BINDINGS = [
-        ("y", "place_order('YES')", "Buy YES"),
-        ("n", "place_order('NO')", "Buy NO"),
+        ("y", "place_order('Up')", "Buy Up"),
+        ("n", "place_order('Down')", "Buy Down"),
         ("f", "flatten", "Flatten All"),
         ("c", "cancel_orders", "Cancel All"),
         ("p", "toggle_positions", "Positions"),
@@ -284,8 +284,8 @@ class TradingTUI(App):
                     yield MetricBox("SIGMA Σ", "0.00", id="metric-sigma")
 
             with Horizontal(id="cards-row"):
-                yield DataCard("YES", id="card-yes")
-                yield DataCard("NO", id="card-no")
+                yield DataCard("Up", id="card-yes")
+                yield DataCard("Down", id="card-no")
         
         yield Footer()
 

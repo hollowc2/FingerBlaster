@@ -49,8 +49,8 @@ class MarketDataManager:
         self.token_map: Dict[str, str] = {}
         # Use dict for O(1) lookups instead of nested dicts
         self.raw_books: Dict[str, Dict[str, Dict[float, float]]] = {
-            'YES': {'bids': {}, 'asks': {}},
-            'NO': {'bids': {}, 'asks': {}}
+            'Up': {'bids': {}, 'asks': {}},
+            'Down': {'bids': {}, 'asks': {}}
         }
         self.market_start_time: Optional[pd.Timestamp] = None
         # Cache for validation results
@@ -102,8 +102,8 @@ class MarketDataManager:
             self.token_map = {}
             self.market_start_time = None
             self.raw_books = {
-                'YES': {'bids': {}, 'asks': {}},
-                'NO': {'bids': {}, 'asks': {}}
+                'Up': {'bids': {}, 'asks': {}},
+                'Down': {'bids': {}, 'asks': {}}
             }
             # Clear validation cache
             self._validation_cache = None
@@ -118,7 +118,7 @@ class MarketDataManager:
         """Update order book for a token type.
         
         Args:
-            token_type: Token type ('YES' or 'NO')
+            token_type: Token type ('Up' or 'Down')
             bids: Dictionary of bid prices to sizes
             asks: Dictionary of ask prices to sizes
         """
@@ -140,7 +140,7 @@ class MarketDataManager:
         Optimized to batch updates.
         
         Args:
-            token_type: Token type ('YES' or 'NO')
+            token_type: Token type ('Up' or 'Down')
             changes: List of price change dictionaries
         """
         if token_type not in self.raw_books:
@@ -199,25 +199,25 @@ class MarketDataManager:
         """
         async with self.lock:
             raw = self.raw_books
-            yes_bids = raw['YES']['bids']
-            yes_asks = raw['YES']['asks']
-            no_bids = raw['NO']['bids']
-            no_asks = raw['NO']['asks']
+            up_bids = raw['Up']['bids']
+            up_asks = raw['Up']['asks']
+            down_bids = raw['Down']['bids']
+            down_asks = raw['Down']['asks']
         
-        # Convert NO prices to YES prices (optimized)
-        combined_bids = dict(yes_bids)
-        combined_asks = dict(yes_asks)
+        # Convert Down prices to Up prices (optimized)
+        combined_bids = dict(up_bids)
+        combined_asks = dict(up_asks)
         
         # Batch conversion for better performance
-        for p_no, s_no in no_asks.items():
-            if s_no > 0:
-                p_yes = round(1.0 - p_no, 4)
-                combined_bids[p_yes] = combined_bids.get(p_yes, 0.0) + s_no
+        for p_down, s_down in down_asks.items():
+            if s_down > 0:
+                p_up = round(1.0 - p_down, 4)
+                combined_bids[p_up] = combined_bids.get(p_up, 0.0) + s_down
         
-        for p_no, s_no in no_bids.items():
-            if s_no > 0:
-                p_yes = round(1.0 - p_no, 4)
-                combined_asks[p_yes] = combined_asks.get(p_yes, 0.0) + s_no
+        for p_down, s_down in down_bids.items():
+            if s_down > 0:
+                p_up = round(1.0 - p_down, 4)
+                combined_asks[p_up] = combined_asks.get(p_up, 0.0) + s_down
         
         # Get best bid and ask
         bids_sorted = sorted(combined_bids.keys(), reverse=True) if combined_bids else []
@@ -259,8 +259,8 @@ class MarketDataManager:
             logger.warning("Invalid token_map: not a dictionary")
             return False
         
-        if 'YES' not in token_map or 'NO' not in token_map:
-            logger.warning("Invalid token_map: missing YES or NO")
+        if 'Up' not in token_map or 'Down' not in token_map:
+            logger.warning("Invalid token_map: missing Up or Down")
             return False
         
         return True
@@ -296,17 +296,17 @@ class MarketDataManager:
         """Get raw order book data for analytics (thread-safe copy).
         
         Returns:
-            Copy of raw order book: {YES/NO: {bids/asks: {price: size}}}
+            Copy of raw order book: {Up/Down: {bids/asks: {price: size}}}
         """
         async with self.lock:
             return {
-                'YES': {
-                    'bids': dict(self.raw_books['YES']['bids']),
-                    'asks': dict(self.raw_books['YES']['asks'])
+                'Up': {
+                    'bids': dict(self.raw_books['Up']['bids']),
+                    'asks': dict(self.raw_books['Up']['asks'])
                 },
-                'NO': {
-                    'bids': dict(self.raw_books['NO']['bids']),
-                    'asks': dict(self.raw_books['NO']['asks'])
+                'Down': {
+                    'bids': dict(self.raw_books['Down']['bids']),
+                    'asks': dict(self.raw_books['Down']['asks'])
                 }
             }
 
@@ -364,7 +364,7 @@ class HistoryManager:
                 self.btc_history.append(price)
     
     async def get_yes_history(self) -> List[Tuple[float, float]]:
-        """Get YES price history (thread-safe copy).
+        """Get Up price history (thread-safe copy).
         
         Returns:
             List of (elapsed_seconds, price) tuples
@@ -382,7 +382,7 @@ class HistoryManager:
             return list(self.btc_history)
     
     async def clear_yes_history(self) -> None:
-        """Clear YES price history."""
+        """Clear Up price history."""
         async with self.lock:
             self.yes_history.clear()
 
@@ -572,14 +572,24 @@ class WebSocketManager:
             return
         
         token_map = await self.market_manager.get_token_map()
+        if not token_map:
+            logger.debug(f"WebSocket message received but token_map is empty. asset_id: {asset_id}")
+            return
+        
         token_type = None
         for outcome, tid in token_map.items():
             if tid == asset_id:
                 token_type = outcome
                 break
         
-        if not token_type or token_type not in ('YES', 'NO'):
+        if not token_type or token_type not in ('Up', 'Down'):
+            logger.debug(
+                f"WebSocket message asset_id {asset_id} not found in token_map. "
+                f"token_map keys: {list(token_map.keys())}, token_map values: {list(token_map.values())}"
+            )
             return
+        
+        logger.debug(f"Processing WebSocket message for {token_type} (asset_id: {asset_id})")
         
         try:
             if 'bids' in item and 'asks' in item:
@@ -595,6 +605,7 @@ class WebSocketManager:
                     if isinstance(x, dict) and 'price' in x and 'size' in x
                 }
                 await self.market_manager.update_order_book(token_type, bids, asks)
+                logger.debug(f"Updated order book for {token_type}: {len(bids)} bids, {len(asks)} asks")
                 
                 # Trigger price recalculation
                 if self.on_message:
@@ -649,7 +660,7 @@ class OrderExecutor:
         """Execute a market order with rate limiting and validation.
         
         Args:
-            side: Order side ('YES' or 'NO')
+            side: Order side ('Up' or 'Down')
             size: Order size
             token_map: Token map dictionary
             

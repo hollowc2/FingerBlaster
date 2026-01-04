@@ -564,7 +564,7 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
     
     def _build_token_map(self, market: Dict[str, Any], clob_token_ids: List[str]) -> Dict[str, str]:
         """
-        Build token map (YES/NO -> token_id) from market data.
+        Build token map (Up/Down -> token_id) from market data.
         
         Extracted from duplicate code to follow DRY principle.
         
@@ -573,33 +573,35 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
             clob_token_ids: List of CLOB token IDs
             
         Returns:
-            Dictionary mapping 'YES' and 'NO' to token IDs
+            Dictionary mapping 'Up' and 'Down' to token IDs
         """
         token_map = {}
-        yes_token_id = None
-        no_token_id = None
+        up_token_id = None
+        down_token_id = None
         
         # Try to get from tokens array
         tokens_data = market.get('tokens', [])
         if tokens_data:
             for token in tokens_data:
-                outcome = token.get('outcome', '').upper()
-                if outcome == 'YES':
-                    yes_token_id = token.get('tokenId') or token.get('clobTokenId')
-                elif outcome == 'NO':
-                    no_token_id = token.get('tokenId') or token.get('clobTokenId')
+                outcome = token.get('outcome', '')
+                # Handle both title case and uppercase
+                outcome_upper = outcome.upper()
+                if outcome_upper in ('YES', 'UP'):
+                    up_token_id = token.get('tokenId') or token.get('clobTokenId')
+                elif outcome_upper in ('NO', 'DOWN'):
+                    down_token_id = token.get('tokenId') or token.get('clobTokenId')
         
         # Build map from found tokens
-        if yes_token_id:
-            token_map['YES'] = yes_token_id
-        if no_token_id:
-            token_map['NO'] = no_token_id
+        if up_token_id:
+            token_map['Up'] = up_token_id
+        if down_token_id:
+            token_map['Down'] = down_token_id
         
         # Fallback to clob_token_ids list if needed
-        if 'YES' not in token_map and len(clob_token_ids) > 0:
-            token_map['YES'] = clob_token_ids[0]
-        if 'NO' not in token_map and len(clob_token_ids) > 1:
-            token_map['NO'] = clob_token_ids[1]
+        if 'Up' not in token_map and len(clob_token_ids) > 0:
+            token_map['Up'] = clob_token_ids[0]
+        if 'Down' not in token_map and len(clob_token_ids) > 1:
+            token_map['Down'] = clob_token_ids[1]
         
         return token_map
     
@@ -703,7 +705,7 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
                 - currentValue: present position value
                 - cashPnl: profit/loss in USDC
                 - percentPnl: profit/loss percentage
-                - outcome: YES or NO
+                - outcome: Up or Down (or legacy YES/NO)
                 - conditionId: market condition ID
         """
         try:
@@ -1759,8 +1761,8 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
         Parse a closed market to determine the winner and timing.
         
         Looks at outcomePrices to determine winner:
-        - ["1.0", "0.0"] or ["1", "0"] means YES won
-        - ["0.0", "1.0"] or ["0", "1"] means NO won
+        - ["1.0", "0.0"] or ["1", "0"] means Up won (first outcome)
+        - ["0.0", "1.0"] or ["0", "1"] means Down won (second outcome)
         
         Args:
             market: Market data dictionary from Gamma API
@@ -1811,27 +1813,27 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
                         return None
                     
                     # Determine which outcome labels we have
-                    # BTC markets use "Up"/"Down", others might use "Yes"/"No"
-                    first_label = str(outcomes_labels[0]).upper() if outcomes_labels and len(outcomes_labels) > 0 else 'YES'
-                    second_label = str(outcomes_labels[1]).upper() if outcomes_labels and len(outcomes_labels) > 1 else 'NO'
+                    # BTC markets use "Up"/"Down", use directly
+                    first_label = str(outcomes_labels[0]) if outcomes_labels and len(outcomes_labels) > 0 else 'Up'
+                    second_label = str(outcomes_labels[1]) if outcomes_labels and len(outcomes_labels) > 1 else 'Down'
+                    
+                    # Normalize to title case
+                    if first_label:
+                        first_label = first_label[0].upper() + first_label[1:].lower() if len(first_label) > 1 else first_label.upper()
+                    if second_label:
+                        second_label = second_label[0].upper() + second_label[1:].lower() if len(second_label) > 1 else second_label.upper()
                     
                     logger.debug(f"Market {market_id}: first_label={first_label}, second_label={second_label}")
-                    
-                    # Map to YES/NO based on the label semantics
-                    # "Up" = YES (BTC >= Strike), "Down" = NO (BTC < Strike)
-                    # "Yes" = YES, "No" = NO
-                    first_is_yes = first_label in ('YES', 'UP')
-                    second_is_yes = second_label in ('YES', 'UP')
                     
                     # Check which outcome won (price = 1 or very close to 1)
                     # The winning outcome has price close to 1, losing has price close to 0
                     if first_price >= 0.5:
-                        # First outcome won
-                        outcome = 'YES' if first_is_yes else 'NO'
+                        # First outcome won - use the label directly
+                        outcome = first_label if first_label in ('Up', 'Down') else 'Up'
                         logger.debug(f"Market {market_id}: first outcome won, outcome={outcome}")
                     elif second_price >= 0.5:
-                        # Second outcome won  
-                        outcome = 'YES' if second_is_yes else 'NO'
+                        # Second outcome won
+                        outcome = second_label if second_label in ('Up', 'Down') else 'Down'
                         logger.debug(f"Market {market_id}: second outcome won, outcome={outcome}")
                     else:
                         logger.debug(f"Market {market_id}: neither price >= 0.5, first={first_price}, second={second_price}")
@@ -1844,9 +1846,18 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
             if not outcome:
                 resolution = market.get('resolution') or market.get('winner')
                 if resolution:
-                    resolution_upper = str(resolution).upper()
-                    if resolution_upper in ('YES', 'NO'):
-                        outcome = resolution_upper
+                    # Normalize to title case
+                    resolution_str = str(resolution)
+                    if resolution_str:
+                        resolution_normalized = resolution_str[0].upper() + resolution_str[1:].lower() if len(resolution_str) > 1 else resolution_str.upper()
+                    else:
+                        resolution_normalized = resolution_str
+                    # Handle both Up/Down and legacy YES/NO
+                    if resolution_normalized in ('Up', 'Down'):
+                        outcome = resolution_normalized
+                    elif resolution_normalized.upper() in ('YES', 'NO'):
+                        # Map legacy YES/NO to Up/Down
+                        outcome = 'Up' if resolution_normalized.upper() == 'YES' else 'Down'
             
             # Method 3: Check outcomes array for winner
             if not outcome:
@@ -1861,12 +1872,17 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
                                 outcome_price == "1.0" or
                                 (isinstance(outcome_price, (int, float)) and outcome_price >= 0.99) or
                                 outcome_obj.get('winner') is True):
-                                outcome_title = str(outcome_obj.get('title', '')).upper()
-                                # Map Yes/Up to YES, No/Down to NO
-                                if outcome_title in ('YES', 'UP'):
-                                    outcome = 'YES'
-                                elif outcome_title in ('NO', 'DOWN'):
-                                    outcome = 'NO'
+                                outcome_title = str(outcome_obj.get('title', ''))
+                                # Normalize to title case and map to Up/Down
+                                if outcome_title:
+                                    outcome_title_normalized = outcome_title[0].upper() + outcome_title[1:].lower() if len(outcome_title) > 1 else outcome_title.upper()
+                                else:
+                                    outcome_title_normalized = outcome_title
+                                # Map Yes/Up to Up, No/Down to Down
+                                if outcome_title_normalized in ('Up', 'Yes') or outcome_title_normalized.upper() in ('YES', 'UP'):
+                                    outcome = 'Up'
+                                elif outcome_title_normalized in ('Down', 'No') or outcome_title_normalized.upper() in ('NO', 'DOWN'):
+                                    outcome = 'Down'
                                 break
                         elif isinstance(outcome_obj, str):
                             # Simple string outcomes - check if we can determine from context

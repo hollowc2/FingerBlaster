@@ -343,10 +343,10 @@ class FingerBlasterPyQtApp(QMainWindow):
             self.shortcuts.append(shortcut)
             return shortcut
         
-        # Buy YES
+        # Buy Up
         create_shortcut("Ctrl+Y", self.buy_yes)
         
-        # Buy NO
+        # Buy Down
         create_shortcut("Ctrl+N", self.buy_no)
         
         # Flatten
@@ -504,9 +504,9 @@ class FingerBlasterPyQtApp(QMainWindow):
         outcome_str = ""
         # Reverse so oldest is first (left), newest is last (right)
         for outcome in reversed(outcomes):
-            if outcome == "YES":
+            if outcome == "Up" or outcome == "YES":  # Support both for backward compatibility
                 outcome_str += '<span style="color: #00ff00;">▲</span>'  # Green up arrow
-            elif outcome == "NO":
+            elif outcome == "Down" or outcome == "NO":  # Support both for backward compatibility
                 outcome_str += '<span style="color: #ff0000;">▼</span>'  # Red down arrow
         if not outcome_str:
             outcome_str = "---"
@@ -586,12 +586,12 @@ class FingerBlasterPyQtApp(QMainWindow):
     
     # Action handlers
     def buy_yes(self):
-        """Place BUY YES order."""
-        run_async_task(self.core.place_order('YES'))
+        """Place BUY Up order."""
+        run_async_task(self.core.place_order('Up'))
     
     def buy_no(self):
-        """Place BUY NO order."""
-        run_async_task(self.core.place_order('NO'))
+        """Place BUY Down order."""
+        run_async_task(self.core.place_order('Down'))
     
     def flatten(self):
         """Flatten all positions."""
@@ -714,8 +714,8 @@ class FingerBlasterPyQtApp(QMainWindow):
         
         # Keybindings
         keybindings = [
-            ("Ctrl+Y", "Buy YES"),
-            ("Ctrl+N", "Buy NO"),
+            ("Ctrl+Y", "Buy Up"),
+            ("Ctrl+N", "Buy Down"),
             ("F", "⚠️ PANIC FLATTEN - Sell all positions immediately"),
             ("Ctrl+C", "Cancel all pending orders"),
             ("Ctrl++ / Ctrl+=", "Increase order size"),

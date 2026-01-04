@@ -4,7 +4,7 @@ interface ExecutionControlsProps {
   yesPrice: number;
   noPrice: number;
   selectedSize: number;
-  onPlaceOrder: (side: 'YES' | 'NO', size?: number) => Promise<void>;
+  onPlaceOrder: (side: 'Up' | 'Down', size?: number) => Promise<void>;
   onSizeUp: () => Promise<void>;
   onSizeDown: () => Promise<void>;
   onSetSize: (size: number) => void;
@@ -24,7 +24,7 @@ const ExecutionControls: React.FC<ExecutionControlsProps> = ({
   disabledReason,
 }) => {
   const [slippage, setSlippage] = useState('0.5%');
-  const [isSubmitting, setIsSubmitting] = useState<'YES' | 'NO' | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState<'Up' | 'Down' | null>(null);
 
   // Format size for display
   const formatSize = (size: number): string => {
@@ -43,7 +43,7 @@ const ExecutionControls: React.FC<ExecutionControlsProps> = ({
   }, [onSetSize]);
 
   // Handle order placement with loading state
-  const handleOrder = useCallback(async (side: 'YES' | 'NO') => {
+  const handleOrder = useCallback(async (side: 'Up' | 'Down') => {
     if (disabled || isSubmitting) return;
     
     setIsSubmitting(side);
@@ -135,21 +135,21 @@ const ExecutionControls: React.FC<ExecutionControlsProps> = ({
       </div>
 
       <div className="grid grid-cols-2 gap-6">
-        {/* YES Button */}
+        {/* Up Button */}
         <button 
-          onClick={() => handleOrder('YES')}
+          onClick={() => handleOrder('Up')}
           disabled={disabled || isSubmitting !== null}
           className={`relative overflow-hidden group h-32 rounded font-bold transition-all flex flex-col items-center justify-center border-4 ring-1 ${
             disabled 
               ? 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed ring-gray-700/50' 
-              : isSubmitting === 'YES'
+              : isSubmitting === 'Up'
                 ? 'bg-primary/90 border-primary text-black ring-primary/50 animate-pulse'
                 : 'bg-primary border-primary text-black ring-primary/50 shadow-glow hover:bg-[#05e04a] hover:shadow-[0_0_25px_rgba(6,249,87,0.4)]'
           }`}
         >
           <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-200"></div>
           <span className="relative z-10 text-xs font-black uppercase tracking-[0.2em] mb-1">
-            {isSubmitting === 'YES' ? 'SUBMITTING...' : 'BET YES'}
+            {isSubmitting === 'Up' ? 'SUBMITTING...' : 'BET UP'}
           </span>
           <div className="relative z-10 flex items-baseline gap-1">
              <span className="text-6xl font-black font-mono tracking-tighter drop-shadow-md">{yesPrice}</span>
@@ -158,21 +158,21 @@ const ExecutionControls: React.FC<ExecutionControlsProps> = ({
           <span className="relative z-10 text-[10px] font-mono mt-1 font-black tracking-widest">LONG VOL</span>
         </button>
         
-        {/* NO Button */}
+        {/* Down Button */}
         <button 
-          onClick={() => handleOrder('NO')}
+          onClick={() => handleOrder('Down')}
           disabled={disabled || isSubmitting !== null}
           className={`relative overflow-hidden group h-32 rounded font-bold transition-all flex flex-col items-center justify-center border-4 ring-1 ${
             disabled 
               ? 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed ring-gray-700/50' 
-              : isSubmitting === 'NO'
+              : isSubmitting === 'Down'
                 ? 'bg-accent-red/90 border-accent-red text-white ring-accent-red/50 animate-pulse'
                 : 'bg-accent-red border-accent-red text-white ring-accent-red/50 shadow-[0_0_20px_rgba(255,59,48,0.3)] hover:bg-[#ff4d40] hover:shadow-[0_0_30px_rgba(255,59,48,0.5)]'
           }`}
         >
           <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-200"></div>
           <span className="relative z-10 text-xs font-black uppercase tracking-[0.2em] mb-1">
-            {isSubmitting === 'NO' ? 'SUBMITTING...' : 'BET NO'}
+            {isSubmitting === 'Down' ? 'SUBMITTING...' : 'BET DOWN'}
           </span>
           <div className="relative z-10 flex items-baseline gap-1">
              <span className="text-6xl font-black font-mono tracking-tighter drop-shadow-md">{noPrice}</span>

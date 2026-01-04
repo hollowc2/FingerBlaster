@@ -34,12 +34,12 @@ class TradingData:
     # Oracle
     oracle: Optional[int] = None
     
-    # YES side
+    # Up side
     yes_FV: Optional[float] = None
     yes_Edge: Optional[str] = None
     yes_Edge_bps: Optional[float] = None
     
-    # NO side
+    # Down side
     no_FV: Optional[float] = None
     no_Edge: Optional[str] = None
     no_Edge_bps: Optional[float] = None
@@ -175,8 +175,8 @@ def get_trading_data() -> Optional[TradingData]:
         
         data = get_trading_data()
         if data:
-            print(f"YES FV: {data.yes_FV}")
-            print(f"YES Edge: {data.yes_Edge} ({data.yes_Edge_bps} bps)")
+            print(f"Up FV: {data.yes_FV}")
+            print(f"Up Edge: {data.yes_Edge} ({data.yes_Edge_bps} bps)")
     
     Returns:
         TradingData object or None if no data available

@@ -41,7 +41,7 @@ const OrderDepth: React.FC<OrderDepthProps> = ({ yesAskDepth, noAskDepth }) => {
     <div className="bg-surface-dark border border-white/5 rounded-lg p-4">
       <h3 className="text-[10px] text-gray-400 uppercase tracking-widest mb-3 font-bold">Order Depth</h3>
       <div className="flex gap-1 h-[100px] items-end justify-center">
-        {/* Bid Side (YES) */}
+        {/* Bid Side (Up) */}
         <div className="flex-1 flex flex-col-reverse items-end gap-0.5 h-full">
           {bidBars.map((height, idx) => (
             <div 
@@ -59,7 +59,7 @@ const OrderDepth: React.FC<OrderDepthProps> = ({ yesAskDepth, noAskDepth }) => {
         
         <div className="w-px h-full bg-white/10 mx-1"></div>
         
-        {/* Ask Side (NO) */}
+        {/* Ask Side (Down) */}
         <div className="flex-1 flex flex-col-reverse items-start gap-0.5 h-full">
           {askBars.map((height, idx) => (
             <div 

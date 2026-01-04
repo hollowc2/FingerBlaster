@@ -65,7 +65,7 @@ class CallbackManager:
     Supported events (defined in CALLBACK_EVENTS):
     - market_update: Market found/changed
     - btc_price_update: BTC price changed
-    - price_update: YES/NO prices changed
+    - price_update: Up/Down prices changed
     - account_stats_update: Balance/position changed
     - countdown_update: Timer tick
     - prior_outcomes_update: Prior outcomes display
@@ -185,7 +185,7 @@ class CallbackManager:
 
 
 class PositionTracker:
-    """Tracks average entry prices for YES/NO positions.
+    """Tracks average entry prices for Up/Down positions.
 
     Provides clean separation of position tracking logic with proper
     validation and weighted average calculations.
@@ -197,8 +197,8 @@ class PositionTracker:
     def __init__(self):
         """Initialize position tracker."""
         self._avg_prices: Dict[str, Optional[float]] = {
-            'YES': None,
-            'NO': None,
+            'Up': None,
+            'Down': None,
         }
 
     def update_position(
@@ -211,7 +211,7 @@ class PositionTracker:
         """Update position with new trade.
 
         Args:
-            side: Which side was traded ('YES' or 'NO')
+            side: Which side was traded ('Up' or 'Down')
             old_balance: Balance before trade
             new_shares: Shares received from trade
             entry_price: Price paid per share
@@ -219,8 +219,10 @@ class PositionTracker:
         Returns:
             True if update was successful, False otherwise
         """
-        side = side.upper()
-        if side not in ('YES', 'NO'):
+        # Normalize to title case
+        if side:
+            side = side[0].upper() + side[1:].lower() if len(side) > 1 else side.upper()
+        if side not in ('Up', 'Down'):
             logger.warning(f"Invalid side for position update: {side}")
             return False
 
@@ -251,44 +253,55 @@ class PositionTracker:
         """Reset position tracking for one or all sides.
 
         Args:
-            side: Side to reset ('YES', 'NO'), or None for both
+            side: Side to reset ('Up', 'Down'), or None for both
         """
         if side is None:
-            self._avg_prices['YES'] = None
-            self._avg_prices['NO'] = None
-        elif side.upper() in ('YES', 'NO'):
-            self._avg_prices[side.upper()] = None
+            self._avg_prices['Up'] = None
+            self._avg_prices['Down'] = None
+        else:
+            # Normalize to title case
+            if side:
+                side_normalized = side[0].upper() + side[1:].lower() if len(side) > 1 else side.upper()
+            else:
+                side_normalized = side
+            if side_normalized in ('Up', 'Down'):
+                self._avg_prices[side_normalized] = None
 
     def get_average_price(self, side: str) -> Optional[float]:
         """Get current average entry price for a side.
 
         Args:
-            side: Side to get price for ('YES' or 'NO')
+            side: Side to get price for ('Up' or 'Down')
 
         Returns:
             Average entry price or None if no position
         """
-        return self._avg_prices.get(side.upper())
+        # Normalize to title case
+        if side:
+            side_normalized = side[0].upper() + side[1:].lower() if len(side) > 1 else side.upper()
+        else:
+            side_normalized = side
+        return self._avg_prices.get(side_normalized)
 
     @property
-    def avg_entry_price_yes(self) -> Optional[float]:
-        """Get YES average entry price."""
-        return self._avg_prices['YES']
+    def avg_entry_price_up(self) -> Optional[float]:
+        """Get Up average entry price."""
+        return self._avg_prices['Up']
 
-    @avg_entry_price_yes.setter
-    def avg_entry_price_yes(self, value: Optional[float]) -> None:
-        """Set YES average entry price."""
-        self._avg_prices['YES'] = value
+    @avg_entry_price_up.setter
+    def avg_entry_price_up(self, value: Optional[float]) -> None:
+        """Set Up average entry price."""
+        self._avg_prices['Up'] = value
 
     @property
-    def avg_entry_price_no(self) -> Optional[float]:
-        """Get NO average entry price."""
-        return self._avg_prices['NO']
+    def avg_entry_price_down(self) -> Optional[float]:
+        """Get Down average entry price."""
+        return self._avg_prices['Down']
 
-    @avg_entry_price_no.setter
-    def avg_entry_price_no(self, value: Optional[float]) -> None:
-        """Set NO average entry price."""
-        self._avg_prices['NO'] = value
+    @avg_entry_price_down.setter
+    def avg_entry_price_down(self, value: Optional[float]) -> None:
+        """Set Down average entry price."""
+        self._avg_prices['Down'] = value
 
 
 class FingerBlasterCore:
@@ -365,45 +378,45 @@ class FingerBlasterCore:
     
     # Backward-compatible property accessors for position tracking
     @property
-    def avg_entry_price_yes(self) -> Optional[float]:
-        """Get YES average entry price (backward compatible)."""
-        return self.position_tracker.avg_entry_price_yes
+    def avg_entry_price_up(self) -> Optional[float]:
+        """Get Up average entry price (backward compatible)."""
+        return self.position_tracker.avg_entry_price_up
     
-    @avg_entry_price_yes.setter
-    def avg_entry_price_yes(self, value: Optional[float]) -> None:
-        """Set YES average entry price (backward compatible)."""
-        self.position_tracker.avg_entry_price_yes = value
+    @avg_entry_price_up.setter
+    def avg_entry_price_up(self, value: Optional[float]) -> None:
+        """Set Up average entry price (backward compatible)."""
+        self.position_tracker.avg_entry_price_up = value
     
     @property
-    def avg_entry_price_no(self) -> Optional[float]:
-        """Get NO average entry price (backward compatible)."""
-        return self.position_tracker.avg_entry_price_no
+    def avg_entry_price_down(self) -> Optional[float]:
+        """Get Down average entry price (backward compatible)."""
+        return self.position_tracker.avg_entry_price_down
     
-    @avg_entry_price_no.setter
-    def avg_entry_price_no(self, value: Optional[float]) -> None:
-        """Set NO average entry price (backward compatible)."""
-        self.position_tracker.avg_entry_price_no = value
+    @avg_entry_price_down.setter
+    def avg_entry_price_down(self, value: Optional[float]) -> None:
+        """Set Down average entry price (backward compatible)."""
+        self.position_tracker.avg_entry_price_down = value
     
     @staticmethod
     def calculate_spreads(
         best_bid: float, 
         best_ask: float
     ) -> Tuple[str, str]:
-        """Calculate formatted spread strings for YES and NO.
+        """Calculate formatted spread strings for Up and Down.
         
         Centralizes spread calculation logic (DRY principle).
         
         Args:
-            best_bid: Best bid price in YES terms
-            best_ask: Best ask price in YES terms
+            best_bid: Best bid price in Up terms
+            best_ask: Best ask price in Up terms
             
         Returns:
-            Tuple of (yes_spread_str, no_spread_str)
+            Tuple of (up_spread_str, down_spread_str)
         """
-        # YES spread is in YES terms: best_bid / best_ask
+        # Up spread is in Up terms: best_bid / best_ask
         yes_spread = f"{best_bid:.2f} / {best_ask:.2f}"
         
-        # NO spread is in NO terms: (1 - best_ask) / (1 - best_bid)
+        # Down spread is in Down terms: (1 - best_ask) / (1 - best_bid)
         no_best_bid = 1.0 - best_ask if best_ask < 1.0 else 0.0
         no_best_ask = 1.0 - best_bid if best_bid > 0.0 else 1.0
         no_spread = f"{no_best_bid:.2f} / {no_best_ask:.2f}"
@@ -764,7 +777,7 @@ class FingerBlasterCore:
                     success = await self.market_manager.set_market(new_market)
                     print(f"[CORE] set_market: {success}", flush=True)
                     if success:
-                        print("[CORE] Clearing YES history...", flush=True)
+                        print("[CORE] Clearing Up history...", flush=True)
                         await self.history_manager.clear_yes_history()
                         strike = str(new_market.get('price_to_beat', 'N/A'))
 
@@ -893,12 +906,12 @@ class FingerBlasterCore:
                 yes_bal = 0.0
                 no_bal = 0.0
                 if token_map:
-                    y_id = token_map.get('YES')
-                    n_id = token_map.get('NO')
-                    if y_id:
-                        yes_bal = await self.connector.get_token_balance(y_id)
-                    if n_id:
-                        no_bal = await self.connector.get_token_balance(n_id)
+                    up_id = token_map.get('Up')
+                    down_id = token_map.get('Down')
+                    if up_id:
+                        yes_bal = await self.connector.get_token_balance(up_id)
+                    if down_id:
+                        no_bal = await self.connector.get_token_balance(down_id)
                 return float(bal or 0.0), float(yes_bal or 0.0), float(no_bal or 0.0)
 
             try:
@@ -913,15 +926,15 @@ class FingerBlasterCore:
             # Reset average entry prices if positions are zero (using threshold to handle floating point precision)
             MIN_BALANCE_THRESHOLD = 0.1
             if y <= MIN_BALANCE_THRESHOLD:
-                self.avg_entry_price_yes = None
-                self.position_tracker.reset('YES')
+                self.avg_entry_price_up = None
+                self.position_tracker.reset('Up')
             if n <= MIN_BALANCE_THRESHOLD:
-                self.avg_entry_price_no = None
-                self.position_tracker.reset('NO')
+                self.avg_entry_price_down = None
+                self.position_tracker.reset('Down')
             
             # Pass average entry prices to UI
             self._emit('account_stats_update', bal, y, n, self.selected_size, 
-                      self.avg_entry_price_yes, self.avg_entry_price_no)
+                      self.avg_entry_price_up, self.avg_entry_price_down)
         except Exception as e:
             logger.error(f"Error updating account stats: {e}", exc_info=True)
     
@@ -1010,12 +1023,12 @@ class FingerBlasterCore:
             yes_position = 0.0
             no_position = 0.0
             if token_map:
-                y_id = token_map.get('YES')
-                n_id = token_map.get('NO')
-                if y_id:
-                    yes_position = await self.connector.get_token_balance(y_id)
-                if n_id:
-                    no_position = await self.connector.get_token_balance(n_id)
+                up_id = token_map.get('Up')
+                down_id = token_map.get('Down')
+                if up_id:
+                    yes_position = await self.connector.get_token_balance(up_id)
+                if down_id:
+                    no_position = await self.connector.get_token_balance(down_id)
             
             # Get prior outcomes for regime detection
             prior_outcomes_data = await self._get_prior_outcomes()
@@ -1041,8 +1054,8 @@ class FingerBlasterCore:
                 order_book=order_book,
                 yes_position=yes_position,
                 no_position=no_position,
-                avg_entry_yes=self.avg_entry_price_yes,
-                avg_entry_no=self.avg_entry_price_no,
+                avg_entry_yes=self.avg_entry_price_up,
+                avg_entry_no=self.avg_entry_price_down,
                 prior_outcomes=outcomes_list,
                 order_size_usd=self.selected_size
             )
@@ -1185,8 +1198,8 @@ class FingerBlasterCore:
                 return
 
             # Calculate resolution
-            # Polymarket: YES wins if BTC >= Strike at market end
-            resolution = "YES" if btc_price >= strike_val else "NO"
+            # Polymarket: Up wins if BTC >= Strike at market end
+            resolution = "Up" if btc_price >= strike_val else "Down"
             
             # Log detailed resolution info for debugging
             diff = btc_price - strike_val
@@ -1196,7 +1209,7 @@ class FingerBlasterCore:
             logger.info(f"  BTC Price: ${btc_price:,.2f} (source: {price_source})")
             logger.info(f"  Strike:    ${strike_val:,.2f} (source: {strike_source})")
             logger.info(f"  Diff:      ${diff:+,.2f} ({diff_bps:+.0f} bps)")
-            logger.info(f"  Result:    {resolution} ({'BTC >= Strike' if resolution == 'YES' else 'BTC < Strike'})")
+            logger.info(f"  Result:    {resolution} ({'BTC >= Strike' if resolution == 'Up' else 'BTC < Strike'})")
             logger.info(f"===========================")
             
             # Query Polymarket's actual resolution for comparison
@@ -1231,7 +1244,7 @@ class FingerBlasterCore:
                     logger.debug(f"Could not query Polymarket resolution: {e}")
             
             self.last_resolution = resolution
-            direction = "UP" if resolution == "YES" else "DOWN"
+            direction = "UP" if resolution == "Up" else "DOWN"
             diff = btc_price - strike_val
             self.log_msg(
                 f"Market Resolved: {resolution} "
@@ -1260,7 +1273,7 @@ class FingerBlasterCore:
                 self._update_prior_outcomes_display()
                 
                 # Log the update (oldest to newest, left to right)
-                arrows = ''.join(['▲' if o == 'YES' else '▼' for o in reversed(self.displayed_prior_outcomes)])
+                arrows = ''.join(['▲' if o == 'Up' else '▼' for o in reversed(self.displayed_prior_outcomes)])
                 logger.info(f"Added {self.last_resolution} to prior outcomes: {arrows}")
             
             self.last_resolution = None
@@ -1413,7 +1426,7 @@ class FingerBlasterCore:
                 self._update_prior_outcomes_display()
                 
                 # Build arrow string for log message (oldest to newest, left to right)
-                arrows = ''.join(['▲' if o == 'YES' else '▼' for o in reversed(consecutive_outcomes)])
+                arrows = ''.join(['▲' if o == 'Up' else '▼' for o in reversed(consecutive_outcomes)])
                 self.log_msg(
                     f"Prior outcomes loaded: {arrows} ({len(consecutive_outcomes)} markets)"
                 )
@@ -1580,10 +1593,11 @@ class FingerBlasterCore:
         """Place an order with improved validation and error handling.
         
         Args:
-            side: Order side ('YES' or 'NO')
+            side: Order side ('Up' or 'Down')
         """
-        # Validate side
-        if side.upper() not in ('YES', 'NO'):
+        # Validate side - normalize to title case
+        side_normalized = side[0].upper() + side[1:].lower() if side and len(side) > 1 else (side.upper() if side else '')
+        if side_normalized not in ('Up', 'Down'):
             self.log_msg(f"Invalid order side: {side}")
             return
         
@@ -1605,9 +1619,9 @@ class FingerBlasterCore:
             if self._cached_prices is not None:
                 # Use cached prices for immediate notification
                 yes_price, no_price, best_bid, best_ask = self._cached_prices
-                if side.upper() == 'YES':
+                if side_normalized == 'Up':
                     estimated_price = best_ask if best_ask > 0 else yes_price
-                else:  # NO
+                else:  # Down
                     no_best_ask = 1.0 - best_bid if best_bid > 0 else no_price
                     estimated_price = no_best_ask
             
@@ -1626,36 +1640,36 @@ class FingerBlasterCore:
             prices = await self.market_manager.calculate_mid_price()
             yes_price, no_price, best_bid, best_ask = prices
             # For BUY orders, use best ask (the price we pay)
-            if side.upper() == 'YES':
+            if side_normalized == 'Up':
                 entry_price = best_ask if best_ask > 0 else yes_price
-            else:  # NO
-                # For NO, best ask in YES terms = 1 - best_bid in NO terms
-                # Best ask for NO = 1 - best_bid (when buying NO, we pay 1 - best_bid in YES terms)
+            else:  # Down
+                # For Down, best ask in Up terms = 1 - best_bid in Down terms
+                # Best ask for Down = 1 - best_bid (when buying Down, we pay 1 - best_bid in Up terms)
                 no_best_ask = 1.0 - best_bid if best_bid > 0 else no_price
                 entry_price = no_best_ask
             
             # Get current position balances before order
-            y_id = token_map.get('YES')
-            n_id = token_map.get('NO')
+            up_id = token_map.get('Up')
+            down_id = token_map.get('Down')
             old_yes_bal = 0.0
             old_no_bal = 0.0
-            if y_id:
-                old_yes_bal = await self.connector.get_token_balance(y_id)
-            if n_id:
-                old_no_bal = await self.connector.get_token_balance(n_id)
+            if up_id:
+                old_yes_bal = await self.connector.get_token_balance(up_id)
+            if down_id:
+                old_no_bal = await self.connector.get_token_balance(down_id)
             
-            resp = await self.order_executor.execute_order(side, size, token_map)
+            resp = await self.order_executor.execute_order(side_normalized, size, token_map)
             
             if resp and resp.get('orderID'):
                 order_id = resp.get('orderID', '')
                 self.log_msg(f"Order FILLED: {order_id[:10]}...")
                 
                 # Emit order filled callback
-                self._emit('order_filled', side, size, entry_price, order_id)
+                self._emit('order_filled', side_normalized, size, entry_price, order_id)
                 
                 # Update average entry price with proper validation
                 self._update_average_entry_price(
-                    side=side.upper(),
+                    side=side_normalized,
                     size=size,
                     entry_price=entry_price,
                     old_yes_bal=old_yes_bal,
@@ -1684,11 +1698,11 @@ class FingerBlasterCore:
         """Update average entry price with proper validation.
         
         Args:
-            side: Order side ('YES' or 'NO')
+            side: Order side ('Up' or 'Down')
             size: Order size in dollars
             entry_price: Price paid per share
-            old_yes_bal: YES balance before order
-            old_no_bal: NO balance before order
+            old_yes_bal: Up balance before order
+            old_no_bal: Down balance before order
         """
         # Validate entry price to prevent division by zero
         if entry_price <= 0:
@@ -1704,35 +1718,35 @@ class FingerBlasterCore:
             logger.warning(f"Invalid shares calculation: {new_shares}")
             return
         
-        if side == 'YES':
+        if side == 'Up':
             total_shares = old_yes_bal + new_shares
             
             if total_shares <= 0:
-                self.avg_entry_price_yes = None
+                self.avg_entry_price_up = None
                 return
             
-            if self.avg_entry_price_yes is not None and old_yes_bal > 0:
+            if self.avg_entry_price_up is not None and old_yes_bal > 0:
                 # Weighted average: (old_cost + new_cost) / total_shares
-                old_cost = self.avg_entry_price_yes * old_yes_bal
+                old_cost = self.avg_entry_price_up * old_yes_bal
                 new_cost = entry_price * new_shares
-                self.avg_entry_price_yes = (old_cost + new_cost) / total_shares
+                self.avg_entry_price_up = (old_cost + new_cost) / total_shares
             else:
                 # First position or no previous position
-                self.avg_entry_price_yes = entry_price
+                self.avg_entry_price_up = entry_price
                 
-        elif side == 'NO':
+        elif side == 'Down':
             total_shares = old_no_bal + new_shares
             
             if total_shares <= 0:
-                self.avg_entry_price_no = None
+                self.avg_entry_price_down = None
                 return
             
-            if self.avg_entry_price_no is not None and old_no_bal > 0:
-                old_cost = self.avg_entry_price_no * old_no_bal
+            if self.avg_entry_price_down is not None and old_no_bal > 0:
+                old_cost = self.avg_entry_price_down * old_no_bal
                 new_cost = entry_price * new_shares
-                self.avg_entry_price_no = (old_cost + new_cost) / total_shares
+                self.avg_entry_price_down = (old_cost + new_cost) / total_shares
             else:
-                self.avg_entry_price_no = entry_price
+                self.avg_entry_price_down = entry_price
     
     async def flatten(self) -> None:
         """Flatten all positions with improved error handling."""
@@ -1773,17 +1787,18 @@ class FingerBlasterCore:
         await self.update_account_stats()
     
     async def close_position(self, side: str) -> None:
-        """Close a single position for one side (YES or NO).
+        """Close a single position for one side (Up or Down).
         
         Args:
-            side: Side to close ('YES' or 'NO')
+            side: Side to close ('Up' or 'Down')
         """
-        side = side.upper()
-        if side not in ('YES', 'NO'):
+        # Normalize to title case
+        side_normalized = side[0].upper() + side[1:].lower() if side and len(side) > 1 else (side.upper() if side else '')
+        if side_normalized not in ('Up', 'Down'):
             self.log_msg(f"Invalid side for close position: {side}")
             return
         
-        self.log_msg(f"Closing {side} position...")
+        self.log_msg(f"Closing {side_normalized} position...")
         
         token_map = await self.market_manager.get_token_map()
         if not token_map:
@@ -1791,9 +1806,9 @@ class FingerBlasterCore:
             self.log_msg(error_msg)
             return
         
-        token_id = token_map.get(side)
+        token_id = token_map.get(side_normalized)
         if not token_id:
-            error_msg = f"Error: Token ID not found for {side}"
+            error_msg = f"Error: Token ID not found for {side_normalized}"
             self.log_msg(error_msg)
             return
         

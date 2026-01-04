@@ -86,7 +86,7 @@ async def verify_api_key(request: Request, api_key: Optional[str] = Security(API
 
 class OrderRequest(BaseModel):
     """Request to place an order."""
-    side: str = Field(..., pattern="^(YES|NO)$", description="Order side: YES or NO")
+    side: str = Field(..., pattern="^(Up|Down)$", description="Order side: Up or Down")
     size: Optional[float] = Field(None, gt=0, description="Order size in USDC")
 
 
@@ -207,7 +207,7 @@ def on_btc_price_update(price: float) -> None:
 
 
 def on_price_update(yes_price: float, no_price: float, best_bid: float, best_ask: float) -> None:
-    """Handle YES/NO price update from core."""
+    """Handle Up/Down price update from core."""
     yes_spread, no_spread = FingerBlasterCore.calculate_spreads(best_bid, best_ask)
     _schedule_broadcast("price_update", {
         "yesPrice": yes_price,
@@ -722,8 +722,8 @@ async def _gather_full_state() -> dict:
             timeout=3.0
         )
         if token_map:
-            y_id = token_map.get('YES')
-            n_id = token_map.get('NO')
+            y_id = token_map.get('Up')
+            n_id = token_map.get('Down')
             if y_id:
                 yes_bal = await asyncio.wait_for(
                     core.connector.get_token_balance(y_id),
@@ -762,8 +762,8 @@ async def _gather_full_state() -> dict:
             "yesBalance": yes_bal,
             "noBalance": no_bal,
             "selectedSize": core.selected_size,
-            "avgEntryYes": core.avg_entry_price_yes,
-            "avgEntryNo": core.avg_entry_price_no,
+            "avgEntryYes": core.avg_entry_price_up,
+            "avgEntryNo": core.avg_entry_price_down,
         },
         "btcPrice": btc_history[-1] if btc_history else 0.0,
         "priorOutcomes": core.displayed_prior_outcomes,

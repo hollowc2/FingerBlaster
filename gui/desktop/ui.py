@@ -212,7 +212,7 @@ class MarketPanel(QFrame):
 
 
 class PricePanel(QFrame):
-    """Panel displaying live YES/NO prices, spread, and edge detection."""
+    """Panel displaying live Up/Down prices, spread, and edge detection."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -228,8 +228,8 @@ class PricePanel(QFrame):
         title.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(title)
         
-        # YES Section
-        yes_label = QLabel("YES")
+        # Up Section
+        yes_label = QLabel("Up")
         yes_label.setStyleSheet("font-weight: bold; font-size: 11pt; color: #00ff00;")
         yes_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(yes_label)
@@ -239,19 +239,19 @@ class PricePanel(QFrame):
         self.yes_price_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.yes_price_label)
         
-        # YES Fair Value / Edge
+        # Up Fair Value / Edge
         self.yes_fv_label = QLabel("FV: --- | EDGE: ---")
         self.yes_fv_label.setStyleSheet("color: #888888; font-size: 9pt;")
         self.yes_fv_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.yes_fv_label)
         
-        # YES Liquidity
+        # Up Liquidity
         self.yes_liq_label = QLabel("DEPTH: $0 | SLIP: 0bps")
         self.yes_liq_label.setStyleSheet("color: #666666; font-size: 9pt;")
         self.yes_liq_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.yes_liq_label)
         
-        # YES Spread
+        # Up Spread
         self.yes_spread_label = QLabel("SPREAD: 0.00 / 0.00")
         self.yes_spread_label.setStyleSheet("color: #888888; font-size: 9pt;")
         self.yes_spread_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
@@ -263,8 +263,8 @@ class PricePanel(QFrame):
         sep.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(sep)
         
-        # NO Section
-        no_label = QLabel("NO")
+        # Down Section
+        no_label = QLabel("Down")
         no_label.setStyleSheet("font-weight: bold; font-size: 11pt; color: #ff0000;")
         no_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(no_label)
@@ -274,19 +274,19 @@ class PricePanel(QFrame):
         self.no_price_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.no_price_label)
         
-        # NO Fair Value / Edge
+        # Down Fair Value / Edge
         self.no_fv_label = QLabel("FV: --- | EDGE: ---")
         self.no_fv_label.setStyleSheet("color: #888888; font-size: 9pt;")
         self.no_fv_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.no_fv_label)
         
-        # NO Liquidity
+        # Down Liquidity
         self.no_liq_label = QLabel("DEPTH: $0 | SLIP: 0bps")
         self.no_liq_label.setStyleSheet("color: #666666; font-size: 9pt;")
         self.no_liq_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.no_liq_label)
         
-        # NO Spread
+        # Down Spread
         self.no_spread_label = QLabel("SPREAD: 0.00 / 0.00")
         self.no_spread_label.setStyleSheet("color: #888888; font-size: 9pt;")
         self.no_spread_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
@@ -339,7 +339,7 @@ class PricePanel(QFrame):
         self.edge_yes = snapshot.edge_yes
         self.edge_no = snapshot.edge_no
         
-        # Update YES FV/Edge
+        # Update Up FV/Edge
         fv_yes = f"{snapshot.fair_value_yes:.2f}" if snapshot.fair_value_yes else "---"
         edge_yes_html = self._format_edge_html(snapshot.edge_yes, snapshot.edge_bps_yes or 0)
         self.yes_fv_label.setText(f"FV: {fv_yes} | EDGE: ")
@@ -347,7 +347,7 @@ class PricePanel(QFrame):
         self.yes_fv_label.setTextFormat(Qt.TextFormat.RichText)
         self.yes_fv_label.setText(f'FV: {fv_yes} | EDGE: {edge_yes_html}')
         
-        # Update NO FV/Edge
+        # Update Down FV/Edge
         fv_no = f"{snapshot.fair_value_no:.2f}" if snapshot.fair_value_no else "---"
         edge_no_html = self._format_edge_html(snapshot.edge_no, snapshot.edge_bps_no or 0)
         self.no_fv_label.setTextFormat(Qt.TextFormat.RichText)
@@ -638,9 +638,9 @@ class ResolutionOverlay(QWidget):
         self.setLayout(layout)
     
     def show_resolution(self, resolution: str):
-        """Show the overlay with the given resolution (green for YES, red for NO)."""
+        """Show the overlay with the given resolution (green for Up, red for Down)."""
         self.resolution_label.setText(resolution)
-        if resolution == "YES":
+        if resolution == "Up":
             # Green flash like terminal app
             self.setStyleSheet("background-color: #00ff00; color: black;")
             self.resolution_label.setStyleSheet("font-size: 72pt; font-weight: bold; color: black;")
