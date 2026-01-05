@@ -375,8 +375,10 @@ class PulseCore:
         Fetches candles for all enabled timeframes.
         """
         logger.info(f"Priming data for {product_id}...")
+        logger.info(f"Enabled timeframes: {[tf.value for tf in self.config.enabled_timeframes]}")
 
         enabled_tfs = self.config.get_enabled_timeframes_list()
+        logger.info(f"Timeframes to prime: {[tf.value for tf in enabled_tfs]}")
 
         # Convert to Coinbase granularities (skip 10s - it's local only)
         granularities = []
@@ -395,46 +397,111 @@ class PulseCore:
             await self._callback_manager.emit('priming_complete', product_id)
             return
 
-        # Fetch candles for each timeframe
+        # Fetch candles for each timeframe (parallel or sequential based on config)
         total = len(granularities)
-        for idx, (tf, gran) in enumerate(granularities):
-            try:
-                # Emit progress
-                progress = (idx + 1) / total
-                await self._callback_manager.emit(
-                    'priming_progress', product_id, tf, progress
-                )
 
-                # Fetch candles
-                raw_candles = await self._connector.prime_timeframe(
-                    product_id,
-                    gran,
-                    bars=self.config.prime_bars_per_timeframe,
-                )
-
-                # Convert to Candle objects and store
-                candles = [
-                    Candle(
-                        timestamp=c['start'],
-                        open=c['open'],
-                        high=c['high'],
-                        low=c['low'],
-                        close=c['close'],
-                        volume=c['volume'],
-                        timeframe=tf,
+        if self.config.prime_parallel:
+            # Parallel priming - much faster!
+            async def prime_single_tf(idx: int, tf: Timeframe, gran: CoinbaseGranularity):
+                try:
+                    # Emit progress
+                    progress = (idx + 1) / total
+                    await self._callback_manager.emit(
+                        'priming_progress', product_id, tf, progress
                     )
-                    for c in raw_candles
-                ]
 
-                await self._candle_manager.add_candles(product_id, candles)
-                logger.info(f"Primed {len(candles)} {tf.value} candles for {product_id}")
+                    # Fetch candles
+                    logger.info(f"Fetching {self.config.prime_bars_per_timeframe} candles for {product_id} {tf.value}...")
+                    raw_candles = await self._connector.prime_timeframe(
+                        product_id,
+                        gran,
+                        bars=self.config.prime_bars_per_timeframe,
+                    )
+                    logger.info(f"Received {len(raw_candles)} raw candles for {tf.value}")
 
-                # Update indicators with latest candles
-                for candle in candles[-20:]:  # Last 20 for warmup
-                    await self._indicator_engine.update(product_id, candle)
+                    # Convert to Candle objects and store
+                    candles = [
+                        Candle(
+                            timestamp=c['start'],
+                            open=c['open'],
+                            high=c['high'],
+                            low=c['low'],
+                            close=c['close'],
+                            volume=c['volume'],
+                            timeframe=tf,
+                        )
+                        for c in raw_candles
+                    ]
 
-            except Exception as e:
-                logger.error(f"Error priming {tf.value} for {product_id}: {e}")
+                    await self._candle_manager.add_candles(product_id, candles)
+                    logger.info(f"Primed {len(candles)} {tf.value} candles for {product_id}")
+
+                    # Update indicators with ALL candles to ensure full warmup
+                    # Then emit the final snapshot so GUI shows data immediately
+                    for candle in candles:
+                        await self._indicator_engine.update(product_id, candle)
+
+                    # The last candle update above will have triggered the indicator_update callback
+                    # So the GUI will immediately show the latest indicator values
+                    logger.info(f"Indicators primed for {tf.value}")
+
+                except Exception as e:
+                    logger.error(f"Error priming {tf.value} for {product_id}: {e}")
+
+            # Execute all timeframe priming in parallel
+            tasks = [
+                prime_single_tf(idx, tf, gran)
+                for idx, (tf, gran) in enumerate(granularities)
+            ]
+            await asyncio.gather(*tasks)
+
+        else:
+            # Sequential priming (slower but safer for rate limits)
+            for idx, (tf, gran) in enumerate(granularities):
+                try:
+                    # Emit progress
+                    progress = (idx + 1) / total
+                    await self._callback_manager.emit(
+                        'priming_progress', product_id, tf, progress
+                    )
+
+                    # Fetch candles
+                    logger.info(f"Fetching {self.config.prime_bars_per_timeframe} candles for {product_id} {tf.value}...")
+                    raw_candles = await self._connector.prime_timeframe(
+                        product_id,
+                        gran,
+                        bars=self.config.prime_bars_per_timeframe,
+                    )
+                    logger.info(f"Received {len(raw_candles)} raw candles for {tf.value}")
+
+                    # Convert to Candle objects and store
+                    candles = [
+                        Candle(
+                            timestamp=c['start'],
+                            open=c['open'],
+                            high=c['high'],
+                            low=c['low'],
+                            close=c['close'],
+                            volume=c['volume'],
+                            timeframe=tf,
+                        )
+                        for c in raw_candles
+                    ]
+
+                    await self._candle_manager.add_candles(product_id, candles)
+                    logger.info(f"Primed {len(candles)} {tf.value} candles for {product_id}")
+
+                    # Update indicators with ALL candles to ensure full warmup
+                    # Then emit the final snapshot so GUI shows data immediately
+                    for candle in candles:
+                        await self._indicator_engine.update(product_id, candle)
+
+                    # The last candle update above will have triggered the indicator_update callback
+                    # So the GUI will immediately show the latest indicator values
+                    logger.info(f"Indicators primed for {tf.value}")
+
+                except Exception as e:
+                    logger.error(f"Error priming {tf.value} for {product_id}: {e}")
 
         self._priming_complete[product_id] = True
         await self._callback_manager.emit('priming_complete', product_id)
@@ -474,6 +541,7 @@ class PulseCore:
 
             # Aggregate into 10s candle
             if product_id in self._candle_aggregators:
+                logger.debug(f"Adding trade to 10s aggregator: {product_id} @ {trade.price}")
                 await self._candle_aggregators[product_id].add_trade(trade)
 
             # Emit trade event
@@ -504,18 +572,40 @@ class PulseCore:
     async def _on_ws_ticker(self, raw_ticker: Dict[str, Any]):
         """Handle ticker from WebSocket."""
         try:
+            # Try multiple possible field names for volume
+            volume_24h = (
+                raw_ticker.get('volume_24_h') or 
+                raw_ticker.get('volume_24h') or 
+                raw_ticker.get('volume24h') or
+                raw_ticker.get('volume') or
+                0
+            )
+            
+            # Log raw ticker data for debugging if volume is 0
+            if float(volume_24h or 0) == 0:
+                logger.debug(f"Ticker volume is 0. Available fields: {list(raw_ticker.keys())}")
+            
             ticker = Ticker(
                 product_id=raw_ticker.get('product_id', ''),
                 price=float(raw_ticker.get('price', 0)),
-                volume_24h=float(raw_ticker.get('volume_24_h', 0)),
-                low_24h=float(raw_ticker.get('low_24_h', 0)),
-                high_24h=float(raw_ticker.get('high_24_h', 0)),
-                price_change_24h=float(raw_ticker.get('price_percent_chg_24_h', 0)),
-                price_change_pct_24h=float(raw_ticker.get('price_percent_chg_24_h', 0)),
+                volume_24h=float(volume_24h or 0),
+                low_24h=float(raw_ticker.get('low_24_h', 0) or raw_ticker.get('low24h', 0) or 0),
+                high_24h=float(raw_ticker.get('high_24_h', 0) or raw_ticker.get('high24h', 0) or 0),
+                price_change_24h=float(raw_ticker.get('price_percent_chg_24_h', 0) or raw_ticker.get('price_change_24h', 0) or 0),
+                price_change_pct_24h=float(raw_ticker.get('price_percent_chg_24_h', 0) or raw_ticker.get('price_change_pct_24h', 0) or 0),
                 timestamp=time.time(),
             )
 
             self._current_ticker[ticker.product_id] = ticker
+
+            # Update live price indicators for all enabled timeframes
+            # This makes the UI more responsive between candle closes
+            for timeframe in self.config.enabled_timeframes:
+                await self._indicator_engine.update_live_price(
+                    ticker.product_id,
+                    timeframe,
+                    ticker.price
+                )
 
             # Emit ticker event
             await self._callback_manager.emit('ticker_update', ticker)
@@ -533,8 +623,15 @@ class PulseCore:
 
     async def _on_10s_candle(self, product_id: str, candle: Candle):
         """Handle completed 10-second candle."""
+        logger.info(f"10s candle completed: {product_id} @ {candle.close} (vol={candle.volume})")
+        
         # Store candle
         await self._candle_manager.add_candle(product_id, candle)
+
+        # Update indicators with this 10s candle (10s is not aggregated, so update directly)
+        logger.info(f"Updating indicators for 10s candle...")
+        snapshot = await self._indicator_engine.update(product_id, candle)
+        logger.info(f"Indicator update completed for 10s: RSI={snapshot.rsi}, ADX={snapshot.adx}")
 
         # Pass to timeframe aggregator (will emit candles for all timeframes)
         await self._timeframe_aggregators[product_id].add_candle(candle)
@@ -556,6 +653,7 @@ class PulseCore:
 
     async def _on_indicator_update(self, snapshot: IndicatorSnapshot):
         """Handle indicator update from engine (per-timeframe)."""
+        logger.info(f"Indicator update received: {snapshot.product_id} {snapshot.timeframe.value} - emitting to callbacks")
         # Emit indicator update with product_id, timeframe, and snapshot
         await self._callback_manager.emit('indicator_update', snapshot.product_id, snapshot.timeframe, snapshot)
 

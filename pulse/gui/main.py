@@ -86,12 +86,24 @@ class CombinedHeaderWidget(Static):
 
         st_color = self._get_signal_color(self.short_term_type)
         lt_color = self._get_signal_color(self.long_term_type)
+        # Format 24h volume with appropriate scale (volume is in USD for BTC-USD)
+        if self.data.volume_24h >= 1e9:
+            vol_str = f"${self.data.volume_24h/1e9:.2f}B"
+        elif self.data.volume_24h >= 1e6:
+            vol_str = f"${self.data.volume_24h/1e6:.2f}M"
+        elif self.data.volume_24h >= 1e3:
+            vol_str = f"${self.data.volume_24h/1e3:.2f}K"
+        elif self.data.volume_24h > 0:
+            vol_str = f"${self.data.volume_24h:.2f}"
+        else:
+            vol_str = "N/A"
+        
         return (
             f"{self.data.symbol}  ${self.data.price:,.2f}  "
             f"{pct_color}{sign}{self.data.change_pct:.2f}%[/]  |  "
-            f"24h Vol: ${self.data.volume_24h/1e9:.1f}B  |  "
-            f"ST: {st_color}{self.short_term_signal}[/]  |  "
-            f"LT: {lt_color}{self.long_term_signal}[/]"
+            f"24h Vol: {vol_str} USD  |  "
+            f"Short Term: {st_color}{self.short_term_signal}[/]  |  "
+            f"Long Term: {lt_color}{self.long_term_signal}[/]"
         )
 
 
@@ -114,6 +126,7 @@ class SignalCard(Static):
         self.indicator_snapshot: Optional[IndicatorSnapshot] = None  # Indicator snapshot for 1h analysis
         self.indicator_snapshot_4h: Optional[IndicatorSnapshot] = None  # Indicator snapshot for 4h analysis
         self.indicator_snapshot_daily: Optional[IndicatorSnapshot] = None  # Indicator snapshot for daily analysis
+        self._rsi_flash_state: bool = False  # Flash state for extreme RSI values
         self.signal = signal  # This triggers watch_signal() which needs self.series
 
     def watch_signal(self, signal: Signal) -> None:
@@ -147,7 +160,7 @@ class SignalCard(Static):
         
         if len(self.trades) == 0:
             return ("", "", "", "")
-        
+
         # Get recent trades (last 15 for histogram)
         recent_trades = self.trades[-15:] if len(self.trades) > 15 else self.trades
         
@@ -710,7 +723,7 @@ class SignalCard(Static):
             if level_info:
                 breakout_str = " | ".join(level_info)
                 breakout_color = "[#f59e0b]"
-            else:
+        else:
                 breakout_str = "No breakout detected"
                 breakout_color = "[#f59e0b]"
         
@@ -1193,6 +1206,54 @@ class SignalCard(Static):
         
         return (exhaustion_str, exhaustion_color)
 
+    def _format_rsi(self, rsi: float) -> str:
+        """
+        Format RSI with color coding:
+        - RSI > 90: Flashing red
+        - RSI > 80: Red
+        - RSI > 70: Orange
+        - RSI < 10: Flashing red (oversold)
+        - RSI < 20: Red (oversold)
+        - RSI < 30: Orange (oversold)
+        """
+        rsi_label = "OB" if rsi > 70 else ("OS" if rsi < 30 else "")
+        rsi_str = f"{rsi:.1f} {rsi_label}".strip()
+        
+        # Determine color based on RSI value
+        if rsi >= 90:
+            # Extreme overbought - flashing red
+            if self._rsi_flash_state:
+                return f"[#ef4444]{rsi_str}[/]"
+            else:
+                return f"[#f87171]{rsi_str}[/]"
+        elif rsi >= 80:
+            # Very overbought - red
+            return f"[#ef4444]{rsi_str}[/]"
+        elif rsi >= 70:
+            # Overbought - orange
+            return f"[#f59e0b]{rsi_str}[/]"
+        elif rsi <= 10:
+            # Extreme oversold - flashing red
+            if self._rsi_flash_state:
+                return f"[#ef4444]{rsi_str}[/]"
+            else:
+                return f"[#f87171]{rsi_str}[/]"
+        elif rsi <= 20:
+            # Very oversold - red
+            return f"[#ef4444]{rsi_str}[/]"
+        elif rsi <= 30:
+            # Oversold - orange
+            return f"[#f59e0b]{rsi_str}[/]"
+        else:
+            # Normal range - no color
+            return rsi_str
+    
+    def toggle_rsi_flash(self) -> None:
+        """Toggle RSI flash state for extreme values."""
+        self._rsi_flash_state = not self._rsi_flash_state
+        # Refresh the card to update RSI display
+        self.refresh()
+
     def _get_score_class(self) -> str:
         """Get CSS class based on score value."""
         score = self.signal.score
@@ -1326,7 +1387,22 @@ class SignalCard(Static):
         lines.append("")
 
         for k, v in self.signal.metrics.items():
-            lines.append(f"{k}: {v}")
+            # Format RSI with color coding if it's the RSI metric
+            if "RSI" in k:
+                # Extract RSI value from the metric string
+                try:
+                    import re
+                    match = re.search(r'(\d+\.?\d*)', v)
+                    if match:
+                        rsi_value = float(match.group(1))
+                        formatted_rsi = self._format_rsi(rsi_value)
+                        lines.append(f"{k}: {formatted_rsi}")
+                    else:
+                        lines.append(f"{k}: {v}")
+                except (ValueError, AttributeError):
+                    lines.append(f"{k}: {v}")
+            else:
+                lines.append(f"{k}: {v}")
         return "\n".join(lines)
 
 
@@ -1816,6 +1892,7 @@ class MarketDashboard(App):
                 metrics["Status"] = f"Indicators warming: {indicators_ready}/{total_indicators}"
 
         if snapshot.rsi is not None:
+            # RSI will be formatted with colors in SignalCard.render()
             rsi_label = "OB" if snapshot.rsi > 70 else ("OS" if snapshot.rsi < 30 else "")
             metrics["RSI(14)"] = f"{snapshot.rsi:.1f} {rsi_label}".strip()
 
@@ -2017,9 +2094,41 @@ class MarketDashboard(App):
                 pass
 
     def _flash_toggle(self) -> None:
-        """Toggle flash state."""
+        """Toggle flash state for alignment and RSI extremes."""
         self._flash_state = not self._flash_state
         self._update_flashing()
+        # Also toggle RSI flash on all cards
+        self._update_rsi_flashing()
+    
+    def _update_rsi_flashing(self) -> None:
+        """Update RSI flash state on all cards for extreme RSI values."""
+        all_card_ids = list(TIMEFRAME_CARD_MAP.values())
+        for card_id in all_card_ids:
+            try:
+                card = self.query_one(f"#{card_id}", SignalCard)
+                # Check if card has RSI that needs flashing
+                if hasattr(card, 'signal') and card.signal.metrics:
+                    rsi_value = None
+                    for key, value in card.signal.metrics.items():
+                        if "RSI" in key:
+                            # Extract RSI value from formatted string
+                            try:
+                                # RSI format is like "85.2 OB" or "[#ef4444]85.2 OB[/]"
+                                import re
+                                match = re.search(r'(\d+\.?\d*)', value)
+                                if match:
+                                    rsi_value = float(match.group(1))
+                                    break
+                            except (ValueError, AttributeError):
+                                pass
+                    
+                    # Only flash if RSI is extreme (>= 90 or <= 10)
+                    if rsi_value is not None and (rsi_value >= 90 or rsi_value <= 10):
+                        # Update flash state and refresh
+                        card._rsi_flash_state = self._flash_state
+                        card.refresh()
+            except Exception:
+                pass  # Card might not exist
 
     async def on_unmount(self) -> None:
         """Cleanup when app closes."""
