@@ -4,7 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-FingerBlaster is a high-performance quantitative trading terminal for Polymarket's "BTC Up or Down 15m" binary markets. It features real-time analytics, Black-Scholes fair value pricing, edge detection, and three UI modes: terminal (Textual), desktop (PyQt6), and web (FastAPI + React).
+FingerBlaster is a comprehensive trading suite for Polymarket with multiple specialized tools:
+
+- **Activetrader** (original FingerBlaster): High-performance quantitative trading terminal for "BTC Up or Down 15m" binary markets with real-time analytics, Black-Scholes fair value pricing, edge detection, and three UI modes: terminal (Textual), desktop (PyQt6), and web (FastAPI + React).
+- **Ladder**: Ladder-style trading interface for visualizing and executing orders across the full price range.
+- **Pulse**: Market pulse and analytics dashboard.
+
+The suite uses a modular architecture where each tool is organized in `src/<tool_name>/` with shared components (connectors, utilities) available for reuse.
 
 ## Running the Application
 
@@ -22,23 +28,28 @@ cp .env.example .env
 # Edit .env and add your PRIVATE_KEY (required for trading)
 ```
 
-### Running Different UI Modes
+### Running Different Tools
 ```bash
-# Terminal UI (default, Textual-based)
+# Activetrader - Terminal UI (default)
 python main.py
-python main.py --textual
+python main.py --activetrader
 
-# Desktop UI (PyQt6)
+# Activetrader - Desktop UI (PyQt6)
 python main.py --desktop
-python main.py --pyqt
+python main.py --activetrader --desktop
 
-# Dashboard UI (Textual alternative layout)
-python main.py --dashboard
-
-# Web UI (FastAPI backend + React frontend)
+# Activetrader - Web UI (FastAPI backend + React frontend)
 python main.py --web
-# Note: Web UI requires separate frontend setup in gui/web/
-cd gui/web && npm install && npm run dev
+python main.py --activetrader --web
+# Note: Web UI requires separate frontend setup
+cd src/activetrader/gui/web && npm install && npm run dev
+
+# Ladder tool
+python main.py --ladder
+python -m src.ladder
+
+# Pulse tool
+python main.py --pulse
 ```
 
 ### Desktop UI System Dependencies
@@ -57,20 +68,23 @@ sudo pacman -S libxcb-cursor
 ## Architecture
 
 ### Core Design Pattern
-The application uses a **shared core + multiple UI frontends** architecture:
-- **FingerBlasterCore** (`src/core.py`) is the central controller containing all business logic
-- **Event-driven callbacks** allow UI-agnostic updates via CallbackManager
-- Each UI (terminal/desktop/web) registers callbacks and renders updates independently
+The suite uses a **modular architecture** with tool-specific modules and shared components:
+- **Tool modules** in `src/<tool_name>/` (e.g., `src/activetrader/`, `src/ladder/`)
+- **Shared components** in `src/connectors/` and `src/shared/` (if needed)
+- **Activetrader** uses a **shared core + multiple UI frontends** architecture:
+  - **FingerBlasterCore** (`src/activetrader/core.py`) is the central controller containing all business logic
+  - **Event-driven callbacks** allow UI-agnostic updates via CallbackManager
+  - Each UI (terminal/desktop/web) registers callbacks and renders updates independently
 
 ### Critical Components
 
-**1. FingerBlasterCore (`src/core.py`)**
+**1. FingerBlasterCore (`src/activetrader/core.py`)**
 - Main orchestrator that coordinates all managers
 - Event-driven callback system (CALLBACK_EVENTS tuple defines all event types)
 - UI-agnostic design - no direct UI references
 - Manages lifecycle: market discovery → WebSocket connection → analytics → order execution
 
-**2. AnalyticsEngine (`src/analytics.py`)**
+**2. AnalyticsEngine (`src/activetrader/analytics.py`)**
 - Black-Scholes binary option pricing with 0% risk-free rate
 - Rolling volatility calculation for z-score/sigma
 - Edge detection: compares market price vs fair value (threshold: 50bps)
@@ -78,23 +92,23 @@ The application uses a **shared core + multiple UI frontends** architecture:
 - Regime detection from prior market outcomes
 - Oracle lag monitoring (Chainlink vs CEX)
 
-**3. Manager Classes (`src/engine.py`)**
+**3. Manager Classes (`src/activetrader/engine.py`)**
 - **MarketDataManager**: Market discovery, order book state, token mapping
 - **HistoryManager**: Maintains price/BTC history using deques (maxlen=10000)
 - **WebSocketManager**: CLOB order book connection with auto-reconnect
 - **OrderExecutor**: Market order execution with aggressive pricing (10% above/below mid)
 - **RTDSManager**: Real-time BTC price from Polymarket's RTDS WebSocket (Chainlink source)
 
-**4. PolymarketConnector (`connectors/polymarket.py`)**
+**4. PolymarketConnector (`src/connectors/polymarket.py`)**
 - Wraps py-clob-client for API interactions
 - Web3 transaction signing with private key from .env
 - Handles order placement, cancellation, balance queries
 - Supports both EOA wallets and proxy wallets (Gnosis Safe)
 
-**5. UI Implementations**
-- **Terminal** (`gui/terminal/`): Textual-based TUI with plotext charts
-- **Desktop** (`gui/desktop/`): PyQt6 with matplotlib charts
-- **Web** (`gui/web/`): FastAPI backend + React frontend (in development)
+**5. UI Implementations (Activetrader)**
+- **Terminal** (`src/activetrader/gui/terminal/`): Textual-based TUI with plotext charts
+- **Desktop** (`src/activetrader/gui/desktop/`): PyQt6 with matplotlib charts
+- **Web** (`src/activetrader/gui/web/`): FastAPI backend + React frontend (in development)
 
 ### Data Flow
 ```
@@ -117,7 +131,7 @@ UI Components render updates
 
 ## Configuration
 
-All configuration is centralized in `src/config.py` via the `AppConfig` dataclass:
+All configuration is centralized in `src/activetrader/config.py` via the `AppConfig` dataclass:
 
 ### Key Settings
 - **Trading**: `order_rate_limit_seconds` (0.5s), `min_order_size` ($1), `size_increment` ($1)
@@ -219,12 +233,18 @@ All timestamps from Polymarket API are UTC. Application uses pandas Timestamp wi
 
 ## Adding New UI Modes
 
-To add a new UI (e.g., ncurses, Streamlit):
-1. Create `gui/<ui_name>/main.py` with `run_<ui_name>_app()` function
-2. Instantiate `FingerBlasterCore` and register callbacks for all relevant events
+To add a new UI for Activetrader (e.g., ncurses, Streamlit):
+1. Create `src/activetrader/gui/<ui_name>/main.py` with `run_<ui_name>_app()` function
+2. Instantiate `FingerBlasterCore` from `src.activetrader.core` and register callbacks for all relevant events
 3. Add command-line argument in `main.py` (e.g., `--ncurses`)
 4. Call `core.run()` to start the event loop
 5. Implement UI rendering based on callback events (never poll core directly)
+
+To add a new tool to the suite:
+1. Create `src/<tool_name>/` directory with `__init__.py`
+2. Implement tool-specific logic in the module
+3. Add entry point in `main.py` with `--<tool_name>` flag
+4. Optionally create `src/<tool_name>/__main__.py` for direct module execution
 
 ## Analytics Snapshot Structure
 

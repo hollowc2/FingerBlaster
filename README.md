@@ -1,8 +1,19 @@
-# FingerBlaster - Polymarket Trading Interface
+# FingerBlaster - Polymarket Trading Suite
 
 ![FingerBlaster Icon](data/images/icon.png)
 
+A comprehensive suite of high-performance trading tools for Polymarket. The suite includes multiple specialized trading interfaces, each optimized for different trading strategies and workflows.
+
+## Tools in the Suite
+
+### Activetrader (Original FingerBlaster)
 A high-performance quantitative trading terminal for Polymarket's "BTC Up or Down 15m" binary markets. Features real-time analytics, Black-Scholes fair value pricing, edge detection, and lightning-fast order execution.
+
+### Ladder
+A ladder-style trading interface for visualizing and executing orders across the full price range.
+
+### Pulse
+Market pulse and analytics dashboard.
 
 ## 🎯 Features
 
@@ -120,32 +131,55 @@ WALLET_ADDRESS=your_wallet_address_here  # Optional, for proxy wallets
 
 ## 💻 Usage
 
-### Terminal UI (Default)
+### Activetrader (Default)
 
-Run the application with the terminal interface:
+Run activetrader with the terminal interface (default):
 
 ```bash
 python main.py
 ```
 
-or
+or explicitly:
 
 ```bash
-python main.py --textual
+python main.py --activetrader
+python main.py --activetrader --terminal
 ```
 
-### Desktop UI
-
-Run the application with the desktop interface:
+Run activetrader with the desktop interface:
 
 ```bash
-python main.py --desktop
+python main.py --activetrader --desktop
+python main.py --desktop  # Also works (activetrader is default)
 ```
 
-or
+Run activetrader with the web interface:
 
 ```bash
-python main.py --pyqt
+python main.py --activetrader --web
+python main.py --web  # Also works
+```
+
+### Ladder Tool
+
+Run the ladder trading interface:
+
+```bash
+python main.py --ladder
+```
+
+or directly:
+
+```bash
+python -m src.ladder
+```
+
+### Pulse Tool
+
+Run the pulse dashboard:
+
+```bash
+python main.py --pulse
 ```
 
 ## ⌨️ Keyboard Shortcuts
@@ -290,7 +324,7 @@ The application automatically:
 
 ### Configuration Options
 
-Key settings can be adjusted in `src/config.py`:
+Key settings can be adjusted in `src/activetrader/config.py`:
 
 #### Trading Settings
 - `order_rate_limit_seconds`: Minimum time between orders (default: 0.5s)
