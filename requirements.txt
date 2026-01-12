@@ -1,19 +1,32 @@
+# Core dependencies
 py-clob-client
 requests
 pandas
 python-dotenv
 websockets
-textual
+textual>=0.43.0
 textual-plotext
 web3
-PyQt6
-PySide6
-matplotlib
-fastapi
-uvicorn[standard]
-pydantic
-slowapi
-python-multipart
 aiohttp>=3.9.0
 aiohttp-retry>=2.8.3
 
+# Coinbase CDP API Key support (JWT authentication)
+# Only needed if using CDP API keys (not legacy HMAC keys)
+PyJWT==2.8.0
+cryptography==42.0.5
+
+# Testing & Dev
+pytest
+pytest-asyncio
+pytest-cov>=4.1.0
+pytest-mock>=3.12.0
+pytest-timeout>=2.2.0
+responses>=0.24.0
+aioresponses>=0.7.6
+freezegun>=1.4.0
+faker>=22.0.0
+coverage[toml]>=7.4.0
+mypy
+flake8
+types-requests
+types-setuptools

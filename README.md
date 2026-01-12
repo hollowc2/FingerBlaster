@@ -1,139 +1,155 @@
 # FingerBlaster - Polymarket Trading Suite
 
+<div align="center">
+
 ![FingerBlaster Icon](data/images/icon.png)
 
-A comprehensive suite of high-performance trading tools for Polymarket. The suite includes multiple specialized trading interfaces, each optimized for different trading strategies and workflows.
+**A comprehensive suite of high-performance trading tools for Polymarket**
 
-## Tools in the Suite
+[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Documentation](#-documentation)
 
-### Activetrader (Original FingerBlaster)
-A high-performance quantitative trading terminal for Polymarket's "BTC Up or Down 15m" binary markets. Features real-time analytics, Black-Scholes fair value pricing, edge detection, and lightning-fast order execution.
+</div>
 
-### Ladder
-A ladder-style trading interface for visualizing and executing orders across the full price range.
+---
 
-### Pulse
-Market pulse and analytics dashboard.
+## Overview
+
+FingerBlaster is a professional-grade trading suite designed for Polymarket's prediction markets. The suite includes three specialized tools, each optimized for different trading strategies and workflows:
+
+- **Activetrader** - Quantitative trading terminal with real-time analytics and Black-Scholes pricing
+- **Ladder** - DOM-style ladder interface for visualizing and executing orders across the full price range
+- **Pulse** - Real-time market analytics dashboard with multi-timeframe technical indicators
+
+All tools feature modern terminal UIs built with [Textual](https://textual.textualize.io/) and are designed for speed, precision, and professional trading workflows.
+
+---
 
 ## 🎯 Features
 
-### Core Functionality
-- **Real-time Market Data**: Live WebSocket connection to Polymarket order books with automatic reconnection
-- **Dual UI Modes**: Choose between terminal-based (Textual) or desktop (PyQt6) interface
-- **Live Charts**: 
-  - Probability chart showing YES price history over time
-  - BTC price chart with strike price overlay
-  - Charts can be toggled on/off for performance
-- **Quick Trading**: One-key order placement (Y for YES, N for NO)
-- **Position Management**: Flatten positions and cancel orders with single keystrokes
-- **Market Context**: 
-  - Strike price display
-  - Real-time countdown timer with urgency coloring
-  - Live BTC price with delta and basis points
-  - Prior outcomes tracking (shows consecutive market results)
-- **Resolution Overlay**: Visual notification when markets resolve
-- **Account Statistics**: Real-time balance, YES/NO positions with average entry prices, unrealized PnL
+### Activetrader 
 
-### 🧮 Quantitative Analytics Engine (NEW in v3.0)
+A high-performance quantitative trading terminal specifically designed for Polymarket's "BTC Up or Down 15m" binary markets.
 
-#### Math & Analytics Layer
-- **Basis Points (bps)**: Distance from strike as `((BTC - Strike) / Strike) × 10,000`
-- **Binary Fair Value**: Simplified Black-Scholes pricing for binary options (0% risk-free rate)
-- **Edge Detection**: Real-time BUY/SELL signals when market price deviates from fair value
-- **Z-Score (σ)**: Rolling 15-minute realized volatility with sigma label (e.g., "+1.5σ")
+**Core Features:**
+- ⚡ **Real-time Market Data** - Live WebSocket connection to Polymarket order books with automatic reconnection
+- 🎯 **One-Key Trading** - Instant order placement (Y for YES, N for NO)
+- 🧮 **Quantitative Analytics Engine**:
+  - Black-Scholes fair value pricing for binary options
+  - Real-time edge detection (BUY/SELL signals)
+  - Z-score (σ) calculation with rolling volatility
+  - Basis points (bps) distance from strike
+  - Liquidity depth analysis and slippage estimation
+  - Regime detection from prior market outcomes
+  - Oracle lag monitoring (Chainlink vs CEX)
+- ⏱️ **Dynamic Timer** - Color-coded urgency system (Green → Orange → Red blinking)
+- 💰 **Real-time PnL** - Unrealized profit/loss tracking with percentages
+- 🚨 **PANIC Button** - Press `F` to immediately flatten all positions
+- 📈 **Position Management** - View positions, entry prices, and account statistics
 
-#### Execution & Risk Management
-- **Liquidity Depth**: Shows dollar depth at top of book for both YES and NO
-- **Real-Time PnL**: Unrealized profit/loss with percentage for open positions
-- **Slippage Calculator**: Estimates fill price impact based on order book depth
-- **⚠️ PANIC Button**: Press `F` to immediately market-sell ALL positions
+### Ladder
 
-#### UX & Urgency Hierarchy
-- **Dynamic Timer**:
-  - 🟢 **> 5 mins**: Green (Normal trading zone)
-  - 🟠 **2-5 mins**: Orange (Watchful - increased gamma exposure)
-  - 🔴 **< 2 mins**: Blinking Red + Large Font (Critical - theta/gamma risk)
-- **Regime Detection**: Analyzes prior outcomes for trend (e.g., "80% BEARISH")
-- **Oracle Lag Monitor**: Compares Chainlink to CEX feeds for front-running opportunities
+A depth-of-market (DOM) style ladder interface for visualizing liquidity and executing orders across the entire price range.
 
-### Architecture
-- **Modular Design**: Shared core logic (`FingerBlasterCore`) used by both UIs
-- **Event-Driven**: Callback-based system for UI updates
-- **Async/Await**: Fully asynchronous for optimal performance
-- **Error Handling**: Comprehensive error handling and logging
+**Core Features:**
+- 📊 **Full Price Range Visualization** - See liquidity from 1¢ to 99¢
+- 📈 **Volume Bars** - Visual representation of order book depth
+- 🎯 **Cursor Navigation** - Navigate with arrow keys or vim-style (j/k)
+- ⚡ **Quick Order Placement**:
+  - Market orders: `y` (YES) / `n` (NO)
+  - Limit orders: `t` (YES) / `b` (NO) at cursor price
+- 🔍 **Order Management**:
+  - View your orders at each price level
+  - Cancel orders at cursor: `x`
+  - Cancel all orders: `c`
+  - Flatten positions: `f`
+- 📏 **Size Control** - Adjust order size with `+`/`-` keys
+- 🎨 **Color-coded Display** - Green for YES bids, Red for NO bids
 
-## 📸 Screenshots
+### Pulse
 
-### Desktop UI (PyQt6)
-![Desktop UI](data/images/FingerBlaster_gui.png)
+Real-time market analytics dashboard with multi-timeframe technical analysis for Coinbase markets.
 
-### Terminal UI (Textual)
-![Terminal UI](data/images/fingerblaster_terminal.png)
+**Core Features:**
+- 📊 **Multi-Timeframe Analysis** - 10s, 1m, 15m, 1h, 4h, Daily
+- 📈 **Technical Indicators**:
+  - RSI (Relative Strength Index)
+  - MACD (Moving Average Convergence Divergence)
+  - ADX (Average Directional Index)
+  - VWAP (Volume Weighted Average Price)
+  - Bollinger Bands
+  - Support/Resistance levels
+- 🎯 **Signal Scoring** - 0-100 score for each timeframe with trading signals
+- 📉 **Order Flow Analysis** - Real-time trade flow visualization (10s timeframe)
+- 🕯️ **Candle Analysis** - OHLC patterns and volume analysis (1m timeframe)
+- 📊 **Market Structure** - Trend detection and swing analysis (15m+ timeframes)
+- 🔄 **Real-time Updates** - Live data from Coinbase Advanced Trade API
+- 🎨 **Visual Dashboard** - Color-coded signal cards with metrics
 
-### Desktop UI - Compact Mode
-![Terminal UI Compact](data/images/fingerblaster_qt_micro.png)
-
-## 🎬 Demo Videos
-
-### Live Trading Demo
-![Live Trading](data/livetrade.gif)
-
-### Fullscreen Interface
-![Fullscreen Interface](data/fingerblaster_fullscreen.gif)
-
-### Side-by-Side with Polymarket
-![FingerBlaster vs Polymarket](data/fingerblaster_fullscreen_next_to_polymarket.gif)
+---
 
 ## 🚀 Installation
 
 ### Prerequisites
-- Python 3.8 or higher
-- Valid Polymarket account with API credentials
-- Private key for signing transactions
-- USDC balance on Polygon for trading
 
-### Step 1: Install Dependencies
+- **Python 3.8+** (Python 3.10+ recommended)
+- **Polymarket Account** with API credentials
+- **Private Key** for signing transactions
+- **USDC Balance** on Polygon for trading
+- **Coinbase API Credentials** (optional, for Pulse module)
+
+### Step 1: Clone the Repository
+
+```bash
+git clone <repository-url>
+cd finger_blaster
+```
+
+### Step 2: Create Virtual Environment
+
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+### Step 3: Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 2: Desktop UI (Optional)
+### Step 4: Configuration
 
-If you want to use the desktop UI, you may need to install system libraries:
+Copy the example environment file and configure your credentials:
 
-**Ubuntu/Debian:**
 ```bash
-sudo apt-get update
-sudo apt-get install libxcb-cursor0 libxcb-cursor-dev
+cp env.example .env
 ```
 
-**Fedora/RHEL/CentOS:**
-```bash
-sudo dnf install libxcb-cursor
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S libxcb-cursor
-```
-
-See [INSTALL_DESKTOP.md](INSTALL_DESKTOP.md) for detailed installation instructions and troubleshooting.
-
-### Step 3: Configuration
-
-Create a `.env` file in the project root:
+Edit `.env` and add your credentials:
 
 ```env
-PRIVATE_KEY=your_private_key_here
-WALLET_ADDRESS=your_wallet_address_here  # Optional, for proxy wallets
+# REQUIRED - Polymarket Authentication
+PRIVATE_KEY=0x...                    # Your private key
+POLY_API_KEY=your_api_key_here        # From https://polymarket.com/settings/api
+POLY_API_SECRET=your_api_secret_here
+POLY_API_PASSPHRASE=your_passphrase_here
+
+# OPTIONAL - Coinbase API (for Pulse module)
+COINBASE_API_KEY=your_coinbase_api_key_here
+COINBASE_API_SECRET=your_coinbase_api_secret_here
+# Only needed for legacy API keys (NOT required for CDP keys)
+COINBASE_API_PASSPHRASE=
 ```
+
+**⚠️ Security Note:** Never commit your `.env` file to version control!
+
+---
 
 ## 💻 Usage
 
 ### Activetrader (Default)
 
-Run activetrader with the terminal interface (default):
+Run the Activetrader terminal interface:
 
 ```bash
 python main.py
@@ -143,24 +159,24 @@ or explicitly:
 
 ```bash
 python main.py --activetrader
-python main.py --activetrader --terminal
 ```
 
-Run activetrader with the desktop interface:
+**Keyboard Shortcuts:**
 
-```bash
-python main.py --activetrader --desktop
-python main.py --desktop  # Also works (activetrader is default)
-```
+| Key | Action |
+|-----|--------|
+| `Y` | Buy YES |
+| `N` | Buy NO |
+| `F` | ⚠️ **PANIC FLATTEN** - Sell all positions immediately |
+| `C` | Cancel all pending orders |
+| `+` / `=` | Increase order size by $1 |
+| `-` | Decrease order size by $1 |
+| `H` | Toggle graphs visibility |
+| `L` | Toggle log panel visibility |
+| `P` | Open position manager |
+| `Q` | Quit application |
 
-Run activetrader with the web interface:
-
-```bash
-python main.py --activetrader --web
-python main.py --web  # Also works
-```
-
-### Ladder Tool
+### Ladder
 
 Run the ladder trading interface:
 
@@ -174,165 +190,143 @@ or directly:
 python -m src.ladder
 ```
 
-### Pulse Tool
+**Keyboard Shortcuts:**
 
-Run the pulse dashboard:
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` / `k` / `j` | Move cursor up/down |
+| `m` | Center view on mid-price |
+| `y` | Place market BUY YES order |
+| `n` | Place market BUY NO order |
+| `t` | Place limit BUY YES order at cursor |
+| `b` | Place limit BUY NO order at cursor |
+| `x` | Cancel orders at cursor price |
+| `c` | Cancel all orders |
+| `f` | Flatten all positions |
+| `+` / `=` | Increase order size |
+| `-` | Decrease order size |
+| `?` / `h` | Show help overlay |
+| `q` | Quit application |
+
+### Pulse
+
+Run the Pulse dashboard:
 
 ```bash
 python main.py --pulse
 ```
 
-## ⌨️ Keyboard Shortcuts
+or directly:
 
-### Terminal UI
-
-| Key | Action |
-|-----|--------|
-| `Y` | Buy YES |
-| `N` | Buy NO |
-| `F` | ⚠️ **PANIC FLATTEN** - Sell all positions immediately |
-| `C` | Cancel all pending orders |
-| `+` / `=` | Increase order size by $1 |
-| `-` / `_` | Decrease order size by $1 |
-| `H` | Toggle graphs visibility |
-| `L` | Toggle log panel visibility |
-| `Q` | Quit application |
-
-### Desktop UI
-
-| Key | Action |
-|-----|--------|
-| `F` | ⚠️ **PANIC FLATTEN** - Sell all positions immediately |
-| `Ctrl+Y` | Buy YES |
-| `Ctrl+N` | Buy NO |
-| `Ctrl+C` | Cancel all pending orders |
-| `Ctrl++` / `Ctrl+=` | Increase order size by $1 |
-| `Ctrl+-` | Decrease order size by $1 |
-| `Ctrl+H` | Toggle graphs visibility |
-| `Ctrl+L` | Toggle log panel visibility |
-| `Ctrl+Q` | Quit application |
-
-### Desktop UI Additional Features
-- **Help Dialog**: Click the "HELP" button to view keyboard shortcuts
-- **Resizable Windows**: Adjust window size to your preference
-
-## 📊 Analytics Display Guide
-
-### Market Panel
-```
-══ MARKET CONTEXT ══
-STRIKE: 95,500.00
-BTC   : $95,623.45
-DELTA: ▲$123 (+13bps)      ← Distance from strike in $ and basis points
-SIGMA : +0.85σ              ← Z-score: How many std devs from strike
-PRIOR : ▲▲▼▲▼▲▲▼▲▲         ← Recent market outcomes
-REGIME: 60% BULLISH         ← Trend detection from prior outcomes
-ORACLE: 45ms                ← Chainlink vs CEX latency (green = fast)
-REMAIN: 08:32               ← Timer with urgency coloring
+```bash
+python -m src.pulse
 ```
 
-### Price Panel
-```
-═══ LIVE PRICES ═══
-YES
-0.58
-FV: 0.55 | EDGE: +54bps BUY  ← Fair value + trading signal
-DEPTH: $1,250 | SLIP: 12bps  ← Liquidity + slippage estimate
-SPREAD: 0.57 / 0.59
+**Command Line Options:**
 
-NO
-0.42
-FV: 0.45 | EDGE: -67bps SELL
-DEPTH: $890 | SLIP: 18bps
-SPREAD: 0.41 / 0.43
-```
+```bash
+# Specify products to track
+python -m src.pulse --products BTC-USD ETH-USD
 
-### Stats Panel
-```
-══ ACCOUNT ══
-CASH: $523.45
-SIZE: $10.00
-POS : Y:15.2@52c | N:0.0
-PnL : +$4.56 (+5.6%)         ← Real-time unrealized PnL
+# Specify timeframes
+python -m src.pulse --timeframes 1m 5m 1h
+
+# Use streaming mode (no GUI)
+python -m src.pulse --streaming
+
+# Verbose logging
+python -m src.pulse --verbose
 ```
 
-## 🎯 Trading Strategy Guide
+**Available Timeframes:**
+- `10s` - 10 Second (HFT analysis)
+- `1m` - 1 Minute (Scalping)
+- `5m` - 5 Minute
+- `15m` - 15 Minute (Intraday)
+- `1h` - 1 Hour (Swing Trading)
+- `4h` - 4 Hour
+- `1d` - Daily (Position Trading)
 
-### Using the Analytics for Decision Making
+---
 
-#### 1. **Edge Detection** - When to Trade
+## 📊 Analytics Guide
+
+### Activetrader Analytics
+
+The analytics engine generates a complete snapshot every 500ms with the following metrics:
+
+**Market Context:**
+- **STRIKE** - Current strike price for the binary market
+- **BTC** - Real-time BTC price (from Chainlink via RTDS)
+- **DELTA** - Distance from strike in $ and basis points
+- **SIGMA (σ)** - Z-score: How many standard deviations from strike
+- **REMAIN** - Countdown timer with urgency coloring
+
+**Price Analysis:**
+- **Fair Value (FV)** - Black-Scholes calculated fair value
+- **Edge** - Deviation from fair value in basis points
+- **Signal** - BUY/SELL recommendation based on edge
+- **DEPTH** - Dollar liquidity at top of book
+- **SLIP** - Estimated slippage for current order size
+
+**Account Stats:**
+- **CASH** - Available USDC balance
+- **SIZE** - Current order size
+- **POS** - Open positions with entry prices
+- **PnL** - Real-time unrealized profit/loss
+
+### Trading Strategy Guide
+
+**1. Edge Detection - When to Trade**
 - **Green "BUY" signal**: Market price < Fair Value → Consider buying
 - **Red "SELL" signal**: Market price > Fair Value → Consider selling/avoiding
 - **Edge > 50bps**: Strong signal worth acting on
 - **Edge < 50bps**: Fair pricing, be selective
 
-#### 2. **Z-Score (Sigma)** - Position Confidence
-- **|σ| > 2.0**: Strong directional move, high confidence in outcome
-- **|σ| < 0.5**: Price near strike, coin-flip territory
+**2. Z-Score (Sigma) - Position Confidence**
+- **\|σ\| > 2.0**: Strong directional move, high confidence
+- **\|σ\| < 0.5**: Price near strike, coin-flip territory
 - **Positive σ**: BTC above strike (YES favored)
 - **Negative σ**: BTC below strike (NO favored)
 
-#### 3. **Timer Urgency** - Risk Management
+**3. Timer Urgency - Risk Management**
 - **Green (>5 min)**: Normal trading, time for positions to work
 - **Orange (2-5 min)**: Gamma increasing, be cautious with new entries
 - **Red Blinking (<2 min)**: High gamma/theta risk, consider flattening
 
-#### 4. **Regime Detection** - Trend Following
-- **>70% Bullish/Bearish**: Strong trend, consider momentum trades
-- **50-70%**: Mixed signals, be selective
-- Use regime to bias directional trades in trending conditions
-
-#### 5. **Oracle Lag** - Front-Running Opportunities
-- **<100ms**: Prices synchronized, fair game
-- **100-500ms**: Minor edge possible with fast execution
-- **>500ms (Yellow)**: Potential arbitrage if you have faster CEX data
-- **>2000ms (Red)**: Significant lag, potential alpha
-
-#### 6. **Liquidity/Slippage** - Execution Quality
+**6. Liquidity/Slippage - Execution Quality**
 - **Depth**: Higher = better fills for larger orders
 - **Slippage >50bps**: Consider scaling into position
 - Check depth before using PANIC flatten
 
-### Example Trading Workflow
+### Pulse Signal Interpretation
 
-1. **Market Opens**: Check regime from prior outcomes
-2. **Assess Edge**: Look for FV divergence > 50bps
-3. **Confirm with σ**: Ensure z-score supports trade direction
-4. **Check Liquidity**: Verify depth supports your size
-5. **Monitor Timer**: As gamma increases (orange/red), tighten risk
-6. **PANIC Button**: If position goes wrong near expiry, press `F`
+**Signal Score (0-100):**
+- **70-100**: Strong bullish signal (green)
+- **40-70**: Neutral/mixed signals (yellow)
+- **0-40**: Strong bearish signal (red)
 
-### Risk Management Rules
+**Timeframe-Specific Analysis:**
+- **10s (HFT)**: Order flow, trade delta, buy/sell pressure
+- **1m (Scalp)**: Candle patterns, VWAP deviation, volume
+- **15m (Intraday)**: Pattern recognition, momentum oscillators
+- **1h+ (Swing)**: Market structure, support/resistance, trend exhaustion
 
-1. **Never fight the timer** - Flatten before red zone if uncertain
-2. **Respect the edge** - Don't buy overvalued, don't sell undervalued
-3. **Size to liquidity** - Check slippage before large trades
-4. **Trend is friend** - Regime detection helps avoid counter-trend trades
-5. **Oracle lag = opportunity** - Fast information = edge
+---
 
 ## ⚙️ Configuration
 
-The application automatically:
-- Discovers active "BTC Up or Down 15m" markets
-- Connects to WebSocket for real-time price updates
-- Updates analytics every 500ms
-- Updates account balances, positions, and PnL every 10 seconds
-- Updates BTC price via RTDS in real-time (Chainlink prices matching Polymarket resolution)
-- Updates market status every 5 seconds
-- Tracks prior market outcomes with timestamps (last 10 consecutive markets)
-- Shows resolution overlay when markets expire
-
-### Configuration Options
+### Activetrader Configuration
 
 Key settings can be adjusted in `src/activetrader/config.py`:
 
-#### Trading Settings
+**Trading Settings:**
 - `order_rate_limit_seconds`: Minimum time between orders (default: 0.5s)
 - `min_order_size`: Minimum order size (default: $1.00)
 - `size_increment`: Order size increment (default: $1.00)
 - `market_duration_minutes`: Market duration (default: 15 minutes)
 
-#### Analytics Settings
+**Analytics Settings:**
 - `analytics_interval`: How often analytics update (default: 0.5s)
 - `timer_critical_minutes`: Red zone threshold (default: 2 min)
 - `timer_watchful_minutes`: Orange zone threshold (default: 5 min)
@@ -341,61 +335,58 @@ Key settings can be adjusted in `src/activetrader/config.py`:
 - `oracle_lag_warning_ms`: Yellow warning threshold (default: 500ms)
 - `oracle_lag_critical_ms`: Red critical threshold (default: 2000ms)
 
-## 📁 Data Files
+### Pulse Configuration
 
-The application creates a `data/` directory containing:
+Pulse configuration is set via `PulseConfig` in `src/pulse/config.py`:
 
-- `finger_blaster.log` - Application logs with timestamps
-- `prior_outcomes.json` - History of market resolutions with timestamps
-- `images/` - Application icons and screenshots
-- `*.gif` - Demo videos showing the application in action
+```python
+from src.pulse import PulseConfig, Timeframe
+
+config = PulseConfig(
+    products=["BTC-USD", "ETH-USD"],
+    enabled_timeframes={
+        Timeframe.ONE_MIN,
+        Timeframe.FIVE_MIN,
+        Timeframe.ONE_HOUR,
+    }
+)
+```
+
+---
 
 ## 🏗️ Architecture
 
 ### Core Components
 
-1. **FingerBlasterCore**: Shared business logic controller
-   - Manages market data, history, WebSocket, and order execution
-   - Event-driven callback system for UI updates
-   - UI-agnostic design
+**1. FingerBlasterCore** (`src/activetrader/core.py`)
+- Shared business logic controller
+- Manages market data, history, WebSocket, and order execution
+- Event-driven callback system for UI updates
+- UI-agnostic design
 
-2. **AnalyticsEngine** (NEW): Quantitative analysis module
-   - Black-Scholes binary option pricing
-   - Rolling volatility calculation
-   - Edge detection and z-score
-   - Liquidity analysis and slippage estimation
-   - Regime detection from prior outcomes
-   - Oracle lag monitoring
+**2. AnalyticsEngine** (`src/activetrader/analytics.py`)
+- Black-Scholes binary option pricing
+- Rolling volatility calculation
+- Edge detection and z-score
+- Liquidity analysis and slippage estimation
 
-3. **MarketDataManager**: Handles market discovery and data
-   - Finds active markets
-   - Calculates mid prices
-   - Manages token maps and order books
 
-4. **HistoryManager**: Tracks price and BTC history
-   - Maintains YES price history
-   - Maintains BTC price history
-   - Provides data for charts and volatility
+**3. Manager Classes** (`src/activetrader/engine.py`)
+- **MarketDataManager**: Market discovery, order book state, token mapping
+- **HistoryManager**: Maintains price/BTC history using deques
+- **WebSocketManager**: CLOB order book connection with auto-reconnect
+- **OrderExecutor**: Market order execution with aggressive pricing
+- **RTDSManager**: Real-time BTC price from Polymarket's RTDS WebSocket
 
-5. **WebSocketManager**: Real-time data connection
-   - Connects to Polymarket WebSocket
-   - Automatic reconnection on failure
-   - Handles ping/pong for connection health
+**4. Connectors** (`src/connectors/`)
+- **PolymarketConnector**: Wraps py-clob-client for API interactions
+- **CoinbaseConnector**: Coinbase Advanced Trade API integration
+- **AsyncHttpFetcherMixin**: Async HTTP request handling with retries
 
-6. **OrderExecutor**: Order placement and management
-   - Executes market orders with aggressive pricing
-   - Flattens positions (PANIC button)
-   - Cancels pending orders
-
-7. **RTDSManager**: Real-time data stream for crypto prices
-   - Connects to Polymarket's RTDS WebSocket for BTC prices
-   - Provides Chainlink BTC/USD prices (matches Polymarket resolution source)
-   - Falls back to Binance API if RTDS unavailable
-   - Maintains historical price data for dynamic strike price resolution
-
-8. **UI Components**:
-   - **Terminal UI** (`gui/terminal/main.py`, `gui/terminal/ui.py`): Textual-based interface
-   - **Desktop UI** (`gui/desktop/main.py`, `gui/desktop/ui.py`): PyQt6-based interface
+**5. UI Components**
+- **Activetrader**: Terminal UI (`src/activetrader/gui/main.py`)
+- **Ladder**: DOM ladder UI (`src/ladder/ladder.py`)
+- **Pulse**: Dashboard UI (`src/pulse/gui/main.py`)
 
 ### Data Flow
 
@@ -410,94 +401,43 @@ AnalyticsEngine (Calculations)
     ↓
 Event Callbacks
     ↓
-UI Components (Terminal/Desktop)
+UI Component (Terminal)
 ```
 
-## 📊 Features in Detail
+---
 
-### Analytics Snapshot
+## 📸 Screenshots & Demos
 
-Every 500ms, the analytics engine generates a complete snapshot including:
-- Basis points from strike
-- Fair values for YES and NO
-- Edge direction and magnitude
-- Z-score and sigma label
-- Liquidity depth at top of book
-- Slippage estimates for current order size
-- Unrealized PnL for open positions
-- Timer urgency level
-- Regime detection results
-- Oracle lag measurement
+### Terminal UI (Textual)
+![Terminal UI](data/images/fingerblaster_terminal.png)
 
-### Prior Outcomes Tracking
+### Live Trading Demo
+![Live Trading](data/livetrade.gif)
 
-The application tracks the last 10 consecutive market outcomes, showing them as:
-- `▲` for YES outcomes (green)
-- `▼` for NO outcomes (red)
+### Fullscreen Interface
+![Fullscreen Interface](data/fingerblaster_fullscreen.gif)
 
-Outcomes are matched by timestamp to ensure only consecutive markets are displayed.
+### Side-by-Side with Polymarket
+![FingerBlaster vs Polymarket](data/fingerblaster_fullscreen_next_to_polymarket.gif)
 
-### Resolution Overlay
-
-When a market expires, a full-screen overlay appears showing:
-- **YES** (green background) if BTC price >= strike price
-- **NO** (red background) if BTC price < strike price
-
-The overlay displays for 3 seconds before the application searches for the next market.
-
-### PANIC Flatten
-
-Press `F` at any time to immediately:
-1. Log a warning message with emoji
-2. Market-sell all YES positions
-3. Market-sell all NO positions
-4. Update account statistics
-
-This is designed for emergency risk management when you need to exit immediately.
-
-### Charts
-
-**Probability Chart**: Shows YES price history over the market duration with:
-- Cyan line for YES price
-- X-axis: Time elapsed (0 to 15 minutes)
-- Y-axis: Price (0.00 to 1.00)
-
-**BTC Chart**: Shows BTC price history with:
-- Cyan line for BTC price
-- Yellow line for strike price (if available)
-- Automatic scaling with padding
-
-### Real-time Updates
-
-- **Analytics**: Every 500ms (configurable)
-- **Price Updates**: Via WebSocket, updates as order book changes
-- **BTC Price**: Updates via RTDS using Chainlink prices
-- **Countdown**: Updates every 200ms for smooth ticking
-- **Account Stats**: Updates every 10 seconds
-- **Market Status**: Checks for new markets every 5 seconds
+---
 
 ## 🔧 Troubleshooting
-
-### Desktop UI Issues
-
-If the desktop UI fails to launch:
-
-1. **Missing System Libraries**: See [INSTALL_DESKTOP.md](INSTALL_DESKTOP.md)
-2. **Wayland**: Try `export QT_QPA_PLATFORM=wayland`
-3. **X11 Issues**: Ensure X11 is running and accessible
 
 ### WebSocket Connection Issues
 
 - Check internet connection
 - Verify Polymarket API is accessible
 - Check logs in `data/finger_blaster.log`
+- Ensure firewall isn't blocking WebSocket connections
 
 ### Order Execution Issues
 
 - Verify `.env` file has correct `PRIVATE_KEY`
-- Ensure sufficient USDC balance
+- Ensure sufficient USDC balance on Polygon
 - Check rate limiting (0.5s between orders)
 - Review logs for specific error messages
+- Verify API credentials are correct
 
 ### Analytics Not Updating
 
@@ -505,6 +445,62 @@ If the desktop UI fails to launch:
 - Check that BTC price is updating
 - Verify WebSocket connection is alive
 - Check logs for analytics errors
+
+### Coinbase API Issues (Pulse)
+
+- Verify API credentials in `.env`
+- Check if using CDP (JWT) or Legacy (HMAC) keys
+- For CDP keys: Ensure `PyJWT` and `cryptography` are installed
+- For Legacy keys: Ensure passphrase is set
+- Check API key permissions (View permission required)
+
+---
+
+## 📁 Project Structure
+
+```
+finger_blaster/
+├── main.py                 # Main entry point
+├── requirements.txt        # Python dependencies
+├── env.example            # Environment configuration template
+├── data/                  # Data directory
+│   ├── images/           # Icons and screenshots
+│   └── *.log             # Application logs
+├── src/
+│   ├── activetrader/     # Activetrader tool
+│   │   ├── core.py       # FingerBlasterCore
+│   │   ├── analytics.py  # AnalyticsEngine
+│   │   ├── engine.py     # Manager classes
+│   │   ├── config.py      # Configuration
+│   │   └── gui/          # Terminal UI
+│   ├── ladder/          # Ladder tool
+│   │   ├── ladder.py     # Main ladder UI
+│   │   ├── core.py       # LadderCore
+│   │   └── ladder_data.py # Data models
+│   ├── pulse/           # Pulse tool
+│   │   ├── core.py       # PulseCore
+│   │   ├── config.py     # Configuration
+│   │   ├── indicators.py # Technical indicators
+│   │   ├── aggregators.py # Data aggregation
+│   │   └── gui/          # Dashboard UI
+│   └── connectors/       # API connectors
+│       ├── polymarket.py # Polymarket API
+│       ├── coinbase.py   # Coinbase API
+│       └── ...
+└── tests/                # Unit tests
+```
+
+---
+
+## 🔒 Security
+
+- **Private Keys**: Never commit your `.env` file to version control
+- **API Credentials**: Store securely and never share
+- **Transactions**: All transactions are signed locally with your private key
+- **PANIC Button**: No confirmation dialog - be careful!
+- **Network**: All API communications use HTTPS/WSS
+
+---
 
 ## 📝 Notes
 
@@ -516,16 +512,7 @@ If the desktop UI fails to launch:
 - **Rate Limiting**: 0.5 seconds between orders to prevent API throttling
 - **PANIC Button**: Press `F` for immediate position exit (no confirmation)
 
-## 🔒 Security
-
-- **Private Keys**: Never commit your `.env` file to version control
-- **API Credentials**: Store securely and never share
-- **Transactions**: All transactions are signed locally with your private key
-- **PANIC Button**: No confirmation dialog - be careful!
-
-## 📄 License
-
-This project is provided as-is for educational and personal use.
+---
 
 ## 🤝 Contributing
 
@@ -533,11 +520,30 @@ Contributions are welcome! Please ensure:
 - Code follows existing style
 - New features are tested
 - Documentation is updated
-- Both UI modes are considered
 - Analytics calculations are validated
+- Type hints are used where appropriate
 
 ---
 
+## 📄 License
+
+This project is provided as-is for educational and personal use.
+
+---
+
+## 🙏 Acknowledgments
+
+- Built with [Textual](https://textual.textualize.io/) for terminal UIs
+- Uses [py-clob-client](https://github.com/Polymarket/py-clob-client) for Polymarket integration
+- Coinbase Advanced Trade API for market data
+
+---
+
+<div align="center">
+
 **Version**: 3.0  
-**Last Updated**: 2025  
-**New in v3.0**: Quantitative Analytics Engine, PANIC Button, Dynamic Timer Urgency, Edge Detection, Z-Score/Sigma, Regime Detection, Oracle Lag Monitor, Real-Time PnL
+**Last Updated**: 2025
+
+**New in v3.0**: Quantitative Analytics Engine, PANIC Button, Dynamic Timer Urgency, Edge Detection, Z-Score/Sigma, Real-Time PnL, Ladder Tool, Pulse Dashboard
+
+</div>

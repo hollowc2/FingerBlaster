@@ -1,0 +1,27 @@
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/gui/*",
+    "*/__init__.py",
+    "*/main.py",
+    "*/__main__.py",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"

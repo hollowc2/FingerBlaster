@@ -1,11 +1,13 @@
-"""Refactored engine components with performance optimizations.
+"""Core engine components for activetrader.
 
-Key improvements:
-- Optimized data structures
-- Better error handling
-- Improved WebSocket reconnection logic
-- Message size validation for security
-- Performance optimizations
+This module provides the core infrastructure and abstractions for:
+- Market data management and order book state
+- WebSocket connectivity and reconnection logic
+- Historical price caching and RTDS history
+- Order execution
+- Integration with configuration and async workflows
+
+Classes in this file are designed to be imported and orchestrated by the main controller in src/activetrader/core.py.
 """
 
 import asyncio
@@ -16,7 +18,7 @@ from collections import deque
 from typing import Optional, Dict, List, Tuple, Any, Callable, Awaitable, Union
 
 import pandas as pd
-import websockets
+from websockets.asyncio.client import connect, ClientConnection
 from websockets.exceptions import ConnectionClosed, InvalidURI, InvalidState
 
 from src.activetrader.config import AppConfig
@@ -98,8 +100,23 @@ class MarketDataManager:
                 start_dt = pd.Timestamp(start_date_str)
                 if start_dt.tz is None:
                     start_dt = start_dt.tz_localize('UTC')
-                self.market_start_time = start_dt
-                logger.debug(f"Using API start_date for market start: {self.market_start_time}")
+                
+                # Check if this start date makes sense for a short-term market
+                # For 15m markets, start should be ~15m before end.
+                # If it's much longer (e.g. > 20 mins), it's likely the Series start time, NOT the market start.
+                end_dt = pd.Timestamp(market.get('end_date'))
+                if end_dt.tz is None:
+                    end_dt = end_dt.tz_localize('UTC')
+                
+                duration_mins = (end_dt - start_dt).total_seconds() / 60.0
+                
+                if duration_mins > 20:
+                    logger.info(f"API start_date yields {duration_mins:.1f}m duration (expected ~15m). Recalculating start time from end date.")
+                    self.market_start_time = end_dt - pd.Timedelta(minutes=self.config.market_duration_minutes)
+                else:
+                    self.market_start_time = start_dt
+                
+                logger.debug(f"Final market start time: {self.market_start_time}")
             else:
                 # Fallback: Calculate from end_date (old behavior)
                 end_dt = pd.Timestamp(market.get('end_date'))
@@ -470,7 +487,7 @@ class WebSocketManager:
         self.on_message = on_message
         self.shutdown_flag = asyncio.Event()
         self.connection_task: Optional[asyncio.Task] = None
-        self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._ws: Optional[ClientConnection] = None
     
     async def start(self) -> None:
         """Start WebSocket connection."""
@@ -508,6 +525,20 @@ class WebSocketManager:
                     await self.connection_task
                 except asyncio.CancelledError:
                     pass
+            finally:
+                self.connection_task = None
+
+    async def subscribe_to_market(self, market: Dict[str, Any]) -> None:
+        """Subscribe to a specific market.
+        
+        This ensures the WebSocket is started and will connect to the 
+        current market in the manager.
+        
+        Args:
+            market: Market data dictionary (unused here, as we poll manager)
+        """
+        logger.info(f"Subscribing WebSocket to market: {market.get('market_id')}")
+        await self.start()
     
     async def _connect_loop(self) -> None:
         """Main connection loop with automatic reconnection and market change detection."""
@@ -544,7 +575,7 @@ class WebSocketManager:
                         await asyncio.sleep(30)
                         reconnect_attempts = 0
 
-                async with websockets.connect(
+                async with connect(
                     self.config.ws_uri,
                     ping_interval=self.config.ws_ping_interval,
                     ping_timeout=self.config.ws_ping_timeout,
@@ -750,14 +781,17 @@ class OrderExecutor:
         self, 
         side: str, 
         size: float, 
-        token_map: Dict[str, str]
+        token_map: Dict[str, str],
+        price: Optional[float] = None
     ) -> Optional[Dict[str, Any]]:
-        """Execute a market order with rate limiting and validation.
+        """Execute an order with rate limiting and validation.
         
         Args:
             side: Order side ('Up' or 'Down')
-            size: Order size
+            size: Order size (in USDC for market orders, in shares for limit orders)
             token_map: Token map dictionary
+            price: Optional limit price. If provided, creates a limit order.
+                   If None, creates a market order (aggressive limit).
             
         Returns:
             Order response dictionary or None
@@ -784,7 +818,23 @@ class OrderExecutor:
         
         target_token_id = token_map[side]
         try:
-            resp = await self.connector.create_market_order(target_token_id, size, 'BUY')
+            if price is not None:
+                # Limit order: size is in shares
+                # Convert USDC to shares if needed (assume size is in USDC)
+                shares = size / price if price > 0 else size
+                
+                # Use asyncio.to_thread to wrap synchronous create_order
+                resp = await asyncio.to_thread(
+                    self.connector.create_order,
+                    target_token_id,
+                    price,
+                    shares,
+                    'BUY'
+                )
+            else:
+                # Market order: size is in USDC
+                resp = await self.connector.create_market_order(target_token_id, size, 'BUY')
+            
             if resp and isinstance(resp, dict) and resp.get('orderID'):
                 return resp
             else:
@@ -852,7 +902,7 @@ class RTDSManager:
         self.on_btc_price = on_btc_price
         self.shutdown_flag = asyncio.Event()
         self.connection_task: Optional[asyncio.Task] = None
-        self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._ws: Optional[ClientConnection] = None
         self.current_btc_price: Optional[float] = None
         self.current_chainlink_price: Optional[float] = None  # Track Chainlink separately
         # Store historical Chainlink prices with timestamps for strike price lookup
@@ -907,7 +957,7 @@ class RTDSManager:
                reconnect_attempts < self.config.rtds_max_reconnect_attempts):
             
             try:
-                async with websockets.connect(
+                async with connect(
                     self.config.rtds_uri,
                     ping_interval=self.config.rtds_ping_interval,
                     ping_timeout=self.config.rtds_ping_timeout,
