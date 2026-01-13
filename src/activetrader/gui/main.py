@@ -230,9 +230,9 @@ class TradingTUI(App):
         border: round #262626;
         background: #161616;
         height: auto;
-        min-height: 14;
-        padding: 1 2;
-        margin-bottom: 1;
+        min-height: 12;
+        padding: 0 2;
+        margin-bottom: 0;
         align: center middle;
     }
     #price-to-beat-row { align: center middle; width: 100%; height: 4; }
@@ -243,7 +243,8 @@ class TradingTUI(App):
 
     #metrics-row {
         height: 5;
-        margin-top: 1;
+        margin-top: 0;
+        margin-bottom: 1;
     }
     MetricBox {
         width: 1fr;
@@ -285,12 +286,12 @@ class TradingTUI(App):
     .border-flashing-red { border: round $error; }
 
     #cards-row {
-        height: 14;
+        height: 12;
     }
     DataCard {
         width: 1fr;
         height: 100%;
-        margin: 0 1;
+        margin: 0 2;
         border: solid #262626;
     }
     #card-yes { border: solid $success; }
@@ -350,7 +351,7 @@ class TradingTUI(App):
         background: rgba(239, 68, 68, 0.15);
     }
 
-    .card-inner { padding: 1 1; }
+    .card-inner { padding: 0 1; }
     .card-row { height: 2; color: $text-muted; }
     .card-stat-left { width: 40%; text-align: left; }
     .card-stat-right { width: 60%; text-align: right; }
@@ -358,7 +359,7 @@ class TradingTUI(App):
     .big-percentage {
         text-align: center;
         width: 100%;
-        height: 6;
+        height: 5;
         text-style: bold;
         color: white;
         content-align: center middle;

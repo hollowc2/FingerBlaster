@@ -362,24 +362,61 @@ class PulseCore:
     async def _on_ticker(self, raw: Dict[str, Any]):
         product_id = raw.get("product_id")
 
-        # Preserve existing volume_24h if we already have it (from REST API)
-        # WebSocket ticker doesn't provide volume_24h, so we don't want to overwrite it
+        # Preserve existing data from REST API if WebSocket doesn't provide it
+        # WebSocket ticker often doesn't include volume_24h or price_change_pct_24h
         existing_volume = 0.0
+        existing_price_change_pct = 0.0
         if product_id in self._tickers:
             existing_volume = self._tickers[product_id].volume_24h
+            existing_price_change_pct = self._tickers[product_id].price_change_pct_24h
 
         # Use volume from WebSocket if available, otherwise preserve existing
         ws_volume = raw.get("volume_24h")
         volume_24h = float(ws_volume) if ws_volume else existing_volume
 
+        # Extract price change percentage from WebSocket
+        # Coinbase ticker channel may provide this as a STRING with % sign or as a number
+        # Try multiple possible field names
+        price_pct_raw = (
+            raw.get("price_percent_chg_24h") or
+            raw.get("price_percentage_change_24h") or
+            raw.get("price_change_pct_24h") or
+            raw.get("price_pct_change_24h") or
+            raw.get("change_pct")
+        )
+
+        # Parse the percentage if WebSocket provides it, otherwise preserve existing
+        if price_pct_raw is not None:
+            # Parse the percentage (handle both string "9.43%" and numeric 9.43)
+            try:
+                if isinstance(price_pct_raw, str):
+                    price_change_pct_24h = float(price_pct_raw.rstrip('%'))
+                else:
+                    price_change_pct_24h = float(price_pct_raw)
+            except (ValueError, AttributeError):
+                logger.warning(f"Failed to parse WebSocket price percentage: {price_pct_raw}")
+                price_change_pct_24h = existing_price_change_pct
+        else:
+            # WebSocket didn't provide it, preserve existing value from REST API
+            price_change_pct_24h = existing_price_change_pct
+
+        # Calculate absolute price change from percentage and current price
+        current_price = float(raw.get("price", 0))
+        if price_change_pct_24h != 0 and current_price > 0:
+            # price_change_24h = current_price * (price_change_pct_24h / 100)
+            # But we can also calculate it from 24h high/low if percentage not available
+            price_change_24h = current_price * (price_change_pct_24h / 100.0)
+        else:
+            price_change_24h = 0.0
+
         ticker = Ticker(
             product_id=product_id,
-            price=float(raw.get("price", 0)),
+            price=current_price,
             volume_24h=volume_24h,
             low_24h=float(raw.get("low_24h", 0) or 0),
             high_24h=float(raw.get("high_24h", 0) or 0),
-            price_change_24h=0,
-            price_change_pct_24h=0,
+            price_change_24h=price_change_24h,
+            price_change_pct_24h=price_change_pct_24h,
             timestamp=time.time(),
         )
         self._tickers[ticker.product_id] = ticker
@@ -407,8 +444,6 @@ class PulseCore:
                 if not product_data:
                     logger.debug(f"No product data received for {product_id}")
                     continue
-
-                logger.debug(f"Product data keys for {product_id}: {list(product_data.keys())}")
 
                 # Extract volume_24h from the response
                 # Prefer approximate_quote_24h_volume (in USD) over volume_24h (in base currency)
@@ -438,29 +473,66 @@ class PulseCore:
                     if "product" in product_data:
                         logger.warning(f"Product sub-fields: {list(product_data['product'].keys())}")
 
-                # Update existing ticker with 24h volume
+                # Extract price change percentage from REST API
+                # Coinbase can return either a STRING "9.43%" or NUMBER 9.43
+                price_pct_raw = product_data.get("price_percentage_change_24h", 0)
+
+                # Parse the percentage (handle both string and numeric formats)
+                try:
+                    if isinstance(price_pct_raw, str):
+                        # Strip % sign if present: "9.43%" -> 9.43
+                        price_change_pct_24h = float(price_pct_raw.rstrip('%'))
+                    else:
+                        # Already a number
+                        price_change_pct_24h = float(price_pct_raw)
+                except (ValueError, AttributeError, TypeError) as e:
+                    logger.warning(f"Failed to parse price_percentage_change_24h: {price_pct_raw} - {e}")
+                    price_change_pct_24h = 0.0
+
+                # Calculate absolute price change from current price if we have the percentage
+                current_price = float(product_data.get("price", 0))
+                if price_change_pct_24h != 0 and current_price > 0:
+                    price_change_24h = current_price * (price_change_pct_24h / 100.0)
+                else:
+                    price_change_24h = 0.0
+
+                logger.debug(f"REST API price_change_pct_24h for {product_id}: {price_change_pct_24h}%")
+
+                # Update existing ticker with 24h volume and price change, or create if doesn't exist
                 if product_id in self._tickers:
                     ticker = self._tickers[product_id]
-                    # Create updated ticker with new volume
+                    # Create updated ticker with new volume and price change
                     updated_ticker = Ticker(
                         product_id=ticker.product_id,
                         price=ticker.price,
                         volume_24h=volume_24h,
                         low_24h=ticker.low_24h,
                         high_24h=ticker.high_24h,
-                        price_change_24h=ticker.price_change_24h,
-                        price_change_pct_24h=ticker.price_change_pct_24h,
+                        price_change_24h=price_change_24h,
+                        price_change_pct_24h=price_change_pct_24h,
                         timestamp=ticker.timestamp,
                     )
                     self._tickers[product_id] = updated_ticker
                     self.bus.emit("ticker", updated_ticker)
-
-                    if volume_24h > 0:
-                        logger.info(f"Updated 24h volume for {product_id}: ${volume_24h:,.0f}")
-                    else:
-                        logger.warning(f"24h volume for {product_id} is 0 or missing")
                 else:
-                    logger.debug(f"Ticker not yet initialized for {product_id}")
+                    # Ticker doesn't exist yet (REST API ran before WebSocket), create it
+                    new_ticker = Ticker(
+                        product_id=product_id,
+                        price=current_price,
+                        volume_24h=volume_24h,
+                        low_24h=0.0,
+                        high_24h=0.0,
+                        price_change_24h=price_change_24h,
+                        price_change_pct_24h=price_change_pct_24h,
+                        timestamp=time.time(),
+                    )
+                    self._tickers[product_id] = new_ticker
+                    self.bus.emit("ticker", new_ticker)
+
+                if volume_24h > 0:
+                    logger.info(f"Updated 24h volume for {product_id}: ${volume_24h:,.0f}")
+                else:
+                    logger.warning(f"24h volume for {product_id} is 0 or missing")
             except Exception as e:
                 logger.warning(f"Failed to fetch stats for {product_id}: {e}", exc_info=True)
 

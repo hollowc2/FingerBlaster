@@ -78,13 +78,14 @@ class VolumeBarRenderer:
         if remainder > 0 and full_blocks < self.max_width:
             bar += self.BLOCKS[remainder]
 
-        # Pad to fixed width
+        # Pad to fixed width - MUST always return max_width chars to prevent update artifacts
         if align_right:
-            bar = bar[::-1].ljust(self.max_width)[::-1]  # Right-align
+            # Right-aligned: reverse bar and pad with spaces on LEFT
+            # This ensures blocks are flush against the right edge of the column
+            return bar[::-1].rjust(self.max_width)
         else:
-            bar = bar.ljust(self.max_width)
-
-        return bar[:self.max_width]
+            # Left-aligned: pad with spaces on right
+            return bar.ljust(self.max_width)
 
 
 # --- 3. Confirmation Dialog ---
@@ -373,26 +374,42 @@ class DOMRowWidget(Horizontal):
 
     DOMRowWidget .no-size-col {
         width: 12;
+        min-width: 12;
+        max-width: 12;
         color: #ff6666;
+        padding: 0;
+        margin: 0;
+        content-align: right middle;
     }
 
     DOMRowWidget .no-price-col {
         width: 5;
+        min-width: 5;
+        max-width: 5;
         text-align: center;
-        background: $surface;
         color: #ff4444;
+        padding: 0;
+        margin: 0;
     }
 
     DOMRowWidget .yes-price-col {
         width: 5;
+        min-width: 5;
+        max-width: 5;
         text-align: center;
-        background: $surface;
         color: #44ff44;
+        padding: 0;
+        margin: 0;
     }
 
     DOMRowWidget .yes-size-col {
         width: 12;
+        min-width: 12;
+        max-width: 12;
         color: #66ff66;
+        padding: 0;
+        margin: 0;
+        content-align: left middle;
     }
 
     DOMRowWidget .my-orders-col {
@@ -407,20 +424,13 @@ class DOMRowWidget(Horizontal):
         background: #1a1a2e;
     }
 
-    DOMRowWidget.spread-row .no-price-col,
-    DOMRowWidget.spread-row .yes-price-col {
-        background: #1a1a2e;
-    }
-
     /* Best bid/ask highlighting */
     DOMRowWidget.best-bid-row .yes-price-col {
-        background: #003300;
         text-style: bold;
         color: #00ff00;
     }
 
     DOMRowWidget.best-ask-row .no-price-col {
-        background: #330000;
         text-style: bold;
         color: #ff0000;
     }
@@ -432,7 +442,6 @@ class DOMRowWidget(Horizontal):
 
     DOMRowWidget.cursor-row .no-price-col,
     DOMRowWidget.cursor-row .yes-price-col {
-        background: $accent 50%;
         text-style: bold;
     }
     """

@@ -8,8 +8,10 @@ Usage:
     python main.py                    # Activetrader terminal UI (default)
     python main.py --ladder           # Ladder tool
     python main.py --pulse            # Pulse dashboard
+    python main.py --pulse --timeframes 1m 15m  # Pulse with specific timeframes
 """
 
+import argparse
 import logging
 import sys
 
@@ -63,11 +65,41 @@ def run_ladder():
         sys.exit(1)
 
 
-def run_pulse():
-    """Run Pulse dashboard."""
+def run_pulse(timeframes=None, products=None):
+    """Run Pulse dashboard.
+
+    Args:
+        timeframes: List of timeframe strings (e.g., ['1m', '15m'])
+        products: List of product IDs (e.g., ['BTC-USD'])
+    """
     try:
         from src.pulse.gui.main import run_pulse_app
-        run_pulse_app()
+        from src.pulse.config import PulseConfig, Timeframe
+
+        # Parse timeframes if provided
+        if timeframes:
+            # Map timeframe strings to Timeframe enum values
+            tf_map = {tf.value: tf for tf in Timeframe}
+            enabled_timeframes = set()
+            for tf_str in timeframes:
+                if tf_str in tf_map:
+                    enabled_timeframes.add(tf_map[tf_str])
+                else:
+                    logger.warning(f"Unknown timeframe: {tf_str}")
+
+            # Create config with specified timeframes
+            if enabled_timeframes:
+                config = PulseConfig(
+                    products=products or ["BTC-USD"],
+                    enabled_timeframes=enabled_timeframes,
+                )
+                run_pulse_app(config=config)
+            else:
+                # No valid timeframes, use default
+                run_pulse_app()
+        else:
+            # No timeframes specified, use default
+            run_pulse_app()
     except ImportError as e:
         logger.error(f"Pulse UI not available: {e}")
         print("ERROR: Pulse UI not available.")
@@ -76,12 +108,37 @@ def run_pulse():
 
 def main():
     """Main entry point - routes to appropriate tool based on command line arguments."""
-    # Check for explicit tool flags
-    if "--ladder" in sys.argv:
+    parser = argparse.ArgumentParser(
+        description="FingerBlaster Trading Suite",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    # Tool selection (mutually exclusive)
+    tool_group = parser.add_mutually_exclusive_group()
+    tool_group.add_argument('--ladder', action='store_true', help='Run Ladder tool')
+    tool_group.add_argument('--pulse', action='store_true', help='Run Pulse dashboard')
+    tool_group.add_argument('--activetrader', action='store_true', help='Run Activetrader (default)')
+
+    # Pulse-specific arguments
+    parser.add_argument(
+        '--timeframes', '-t',
+        nargs='+',
+        help='Timeframes for Pulse (e.g., 1m 15m 1h). Available: 10s, 1m, 5m, 15m, 1h, 4h, 1d'
+    )
+    parser.add_argument(
+        '--products', '-p',
+        nargs='+',
+        help='Product IDs for Pulse (default: BTC-USD)'
+    )
+
+    args = parser.parse_args()
+
+    # Route to appropriate tool
+    if args.ladder:
         run_ladder()
-    elif "--pulse" in sys.argv:
-        run_pulse()
-    elif "--activetrader" in sys.argv:
+    elif args.pulse:
+        run_pulse(timeframes=args.timeframes, products=args.products)
+    elif args.activetrader:
         run_activetrader()
     else:
         # Default to Activetrader if no tool flag specified

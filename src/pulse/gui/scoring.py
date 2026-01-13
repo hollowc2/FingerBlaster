@@ -148,16 +148,16 @@ def _compute_vwap_score(vwap_deviation: float) -> float:
 def _get_label_and_description(score: int) -> Tuple[str, str]:
     """Get label and description based on score."""
     if score >= 80:
-        return ("Strong Buy", "Multiple bullish signals aligned")
+        return ("Strong Buy", "Strong bullish")
     elif score >= 65:
-        return ("Bullish", "Moderate bullish momentum")
+        return ("Bullish", "Bullish momentum")
     elif score >= 55:
-        return ("Lean Bull", "Slight bullish bias")
+        return ("Lean Bull", "Slight bullish")
     elif score >= 45:
-        return ("Neutral", "Mixed or choppy conditions")
+        return ("Neutral", "Mixed/choppy")
     elif score >= 35:
-        return ("Lean Bear", "Slight bearish bias")
+        return ("Lean Bear", "Slight bearish")
     elif score >= 20:
-        return ("Bearish", "Moderate bearish momentum")
+        return ("Bearish", "Bearish momentum")
     else:
-        return ("Strong Sell", "Multiple bearish signals aligned")
+        return ("Strong Sell", "Strong bearish")

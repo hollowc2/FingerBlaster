@@ -99,11 +99,11 @@ class CombinedHeaderWidget(Static):
             vol_str = "N/A"
         
         return (
-            f"{self.data.symbol}  ${self.data.price:,.2f}  "
-            f"{pct_color}{sign}{self.data.change_pct:.2f}%[/]  |  "
-            f"24h Vol: {vol_str} USD  |  "
-            f"Short Term: {st_color}{self.short_term_signal}[/]  |  "
-            f"Long Term: {lt_color}{self.long_term_signal}[/]"
+            f"{self.data.symbol} ${self.data.price:,.2f} "
+            f"{pct_color}{sign}{self.data.change_pct:.2f}%[/] | "
+            f"Vol: {vol_str} | "
+            f"ST: {st_color}{self.short_term_signal}[/] | "
+            f"LT: {lt_color}{self.long_term_signal}[/]"
         )
 
 
@@ -1456,13 +1456,25 @@ class MarketDashboard(App):
     _flash_state: bool = False
     _flash_timer: Optional[Timer] = None
 
-    def __init__(self):
+    def __init__(self, config: Optional[PulseConfig] = None):
         super().__init__()
         logger.info("MarketDashboard.__init__() called")
         self.core: Optional[PulseCore] = None
         self._indicator_snapshots: Dict[Timeframe, IndicatorSnapshot] = {}
         self._current_ticker: Optional[Ticker] = None
-        logger.info("MarketDashboard.__init__() completed")
+        # Store config or use default with all timeframes
+        self.config = config if config else PulseConfig(
+            products=["BTC-USD"],
+            enabled_timeframes={
+                Timeframe.TEN_SEC,
+                Timeframe.ONE_MIN,
+                Timeframe.FIFTEEN_MIN,
+                Timeframe.ONE_HOUR,
+                Timeframe.FOUR_HOUR,
+                Timeframe.ONE_DAY,
+            },
+        )
+        logger.info(f"MarketDashboard.__init__() completed with timeframes: {[tf.value for tf in self.config.enabled_timeframes]}")
 
     def compose(self) -> ComposeResult:
         try:
@@ -1470,38 +1482,28 @@ class MarketDashboard(App):
             yield CombinedHeaderWidget(id="combined_header")
             logger.info("Header widget yielded")
 
+            # Card definitions: (timeframe_enum, card_id, display_label)
+            card_definitions = [
+                (Timeframe.TEN_SEC, "ltf-10s", "10s HFT"),
+                (Timeframe.ONE_MIN, "ltf-1m", "1m Scalp"),
+                (Timeframe.FIFTEEN_MIN, "ltf-15m", "15m Intraday"),
+                (Timeframe.ONE_HOUR, "htf-1h", "1h"),
+                (Timeframe.FOUR_HOUR, "htf-4h", "4h"),
+                (Timeframe.ONE_DAY, "htf-daily", "Daily"),
+            ]
+
             with Grid():
                 logger.info("Grid context entered")
-                yield SignalCard(
-                    "Loading", "10s HFT",
-                    Signal("Loading", 50, "Initializing...", {}),
-                    id="ltf-10s"
-                )
-                yield SignalCard(
-                    "Loading", "1m Scalp",
-                    Signal("Loading", 50, "Initializing...", {}),
-                    id="ltf-1m"
-                )
-                yield SignalCard(
-                    "Loading", "15m Intraday",
-                    Signal("Loading", 50, "Initializing...", {}),
-                    id="ltf-15m"
-                )
-                yield SignalCard(
-                    "Loading", "1h",
-                    Signal("Loading", 50, "Initializing...", {}),
-                    id="htf-1h"
-                )
-                yield SignalCard(
-                    "Loading", "4h",
-                    Signal("Loading", 50, "Initializing...", {}),
-                    id="htf-4h"
-                )
-                yield SignalCard(
-                    "Loading", "Daily",
-                    Signal("Loading", 50, "Initializing...", {}),
-                    id="htf-daily"
-                )
+                for timeframe, card_id, display_label in card_definitions:
+                    if timeframe in self.config.enabled_timeframes:
+                        logger.info(f"Rendering card for {timeframe.value}")
+                        yield SignalCard(
+                            "Loading", display_label,
+                            Signal("Loading", 50, "Initializing...", {}),
+                            id=card_id
+                        )
+                    else:
+                        logger.info(f"Skipping card for {timeframe.value} (not enabled)")
             logger.info("All widgets composed successfully")
         except Exception as e:
             logger.error(f"Error in compose(): {e}", exc_info=True)
@@ -1511,21 +1513,10 @@ class MarketDashboard(App):
         """Initialize PulseCore and register callbacks."""
         try:
             logger.info("on_mount() started")
-            # Configure for exactly the 6 required timeframes
-            config = PulseConfig(
-                products=["BTC-USD"],
-                enabled_timeframes={
-                    Timeframe.TEN_SEC,
-                    Timeframe.ONE_MIN,
-                    Timeframe.FIFTEEN_MIN,
-                    Timeframe.ONE_HOUR,
-                    Timeframe.FOUR_HOUR,
-                    Timeframe.ONE_DAY,
-                },
-            )
-            logger.info("Config created")
+            # Use stored config from __init__
+            logger.info(f"Using config with timeframes: {[tf.value for tf in self.config.enabled_timeframes]}")
 
-            self.core = PulseCore(config=config)
+            self.core = PulseCore(config=self.config)
             logger.info("PulseCore instantiated")
 
             # Register callbacks using the correct event bus API
@@ -1813,23 +1804,25 @@ class MarketDashboard(App):
     def _calculate_st_signal(self) -> tuple:
         """Calculate short-term signal type and label. Returns (type, label)."""
         try:
-            ltf_10s = self.query_one("#ltf-10s", SignalCard)
-            ltf_1m = self.query_one("#ltf-1m", SignalCard)
-            ltf_15m = self.query_one("#ltf-15m", SignalCard)
+            # Collect scores from only the cards that exist
+            scores = []
+            for card_id in ["#ltf-10s", "#ltf-1m", "#ltf-15m"]:
+                try:
+                    card = self.query_one(card_id, SignalCard)
+                    scores.append(card.signal.score)
+                except Exception:
+                    pass  # Card doesn't exist (timeframe not enabled)
 
-            scores = [
-                ltf_10s.signal.score,
-                ltf_1m.signal.score,
-                ltf_15m.signal.score
-            ]
+            if not scores:
+                return ("mixed", "MIXED")
 
             # Count strong bullish (>=70), moderate bullish (60-69), and bearish (<=40)
             strong_bullish = sum(1 for s in scores if s >= 70)
             moderate_bullish = sum(1 for s in scores if 60 <= s < 70)
             bearish = sum(1 for s in scores if s <= 40)
-            
+
             # Calculate average score for better signal quality
-            avg_score = sum(scores) / len(scores) if scores else 50
+            avg_score = sum(scores) / len(scores)
 
             # Bullish if: 2+ strong bullish, OR (1+ strong + 1+ moderate), OR avg >= 60
             if strong_bullish >= 2 or (strong_bullish >= 1 and moderate_bullish >= 1) or avg_score >= 60:
@@ -1845,23 +1838,25 @@ class MarketDashboard(App):
     def _calculate_lt_signal(self) -> tuple:
         """Calculate long-term signal type and label. Returns (type, label)."""
         try:
-            htf_1h = self.query_one("#htf-1h", SignalCard)
-            htf_4h = self.query_one("#htf-4h", SignalCard)
-            htf_daily = self.query_one("#htf-daily", SignalCard)
+            # Collect scores from only the cards that exist
+            scores = []
+            for card_id in ["#htf-1h", "#htf-4h", "#htf-daily"]:
+                try:
+                    card = self.query_one(card_id, SignalCard)
+                    scores.append(card.signal.score)
+                except Exception:
+                    pass  # Card doesn't exist (timeframe not enabled)
 
-            scores = [
-                htf_1h.signal.score,
-                htf_4h.signal.score,
-                htf_daily.signal.score
-            ]
+            if not scores:
+                return ("mixed", "MIXED")
 
             # Count strong bullish (>=70), moderate bullish (60-69), and bearish (<=40)
             strong_bullish = sum(1 for s in scores if s >= 70)
             moderate_bullish = sum(1 for s in scores if 60 <= s < 70)
             bearish = sum(1 for s in scores if s <= 40)
-            
+
             # Calculate average score for better signal quality
-            avg_score = sum(scores) / len(scores) if scores else 50
+            avg_score = sum(scores) / len(scores)
 
             # Bullish if: 2+ strong bullish, OR (1+ strong + 1+ moderate), OR avg >= 60
             if strong_bullish >= 2 or (strong_bullish >= 1 and moderate_bullish >= 1) or avg_score >= 60:
@@ -1877,15 +1872,17 @@ class MarketDashboard(App):
     def _check_ltf_alignment(self) -> Optional[str]:
         """Check if all LTF signals are aligned. Returns 'red', 'green', or None."""
         try:
-            ltf_10s = self.query_one("#ltf-10s", SignalCard)
-            ltf_1m = self.query_one("#ltf-1m", SignalCard)
-            ltf_15m = self.query_one("#ltf-15m", SignalCard)
+            # Collect scores from only the cards that exist
+            scores = []
+            for card_id in ["#ltf-10s", "#ltf-1m", "#ltf-15m"]:
+                try:
+                    card = self.query_one(card_id, SignalCard)
+                    scores.append(card.signal.score)
+                except Exception:
+                    pass  # Card doesn't exist (timeframe not enabled)
 
-            scores = [
-                ltf_10s.signal.score,
-                ltf_1m.signal.score,
-                ltf_15m.signal.score
-            ]
+            if not scores:
+                return None
 
             # Check if all are red
             if all(self._is_red(s) for s in scores):
@@ -1900,15 +1897,17 @@ class MarketDashboard(App):
     def _check_htf_alignment(self) -> Optional[str]:
         """Check if all HTF signals are aligned. Returns 'red', 'green', or None."""
         try:
-            htf_1h = self.query_one("#htf-1h", SignalCard)
-            htf_4h = self.query_one("#htf-4h", SignalCard)
-            htf_daily = self.query_one("#htf-daily", SignalCard)
+            # Collect scores from only the cards that exist
+            scores = []
+            for card_id in ["#htf-1h", "#htf-4h", "#htf-daily"]:
+                try:
+                    card = self.query_one(card_id, SignalCard)
+                    scores.append(card.signal.score)
+                except Exception:
+                    pass  # Card doesn't exist (timeframe not enabled)
 
-            scores = [
-                htf_1h.signal.score,
-                htf_4h.signal.score,
-                htf_daily.signal.score
-            ]
+            if not scores:
+                return None
 
             # Check if all are red
             if all(self._is_red(s) for s in scores):
@@ -2026,10 +2025,15 @@ class MarketDashboard(App):
         self.exit()
 
 
-def run_pulse_app():
-    """Entry point for Pulse terminal dashboard."""
+def run_pulse_app(config: Optional[PulseConfig] = None):
+    """Entry point for Pulse terminal dashboard.
+
+    Args:
+        config: Optional PulseConfig with enabled timeframes and products.
+                If None, uses default config with all timeframes enabled.
+    """
     try:
-        app = MarketDashboard()
+        app = MarketDashboard(config=config)
         app.run()
     except Exception as e:
         logger.error(f"Pulse app crashed: {e}", exc_info=True)

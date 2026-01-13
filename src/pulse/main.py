@@ -409,7 +409,12 @@ def run():
         # Use GUI mode (default)
         try:
             from src.pulse.gui import run_pulse_app
-            run_pulse_app()
+            # Create config from parsed args
+            config = PulseConfig(
+                products=args.products,
+                enabled_timeframes=parse_timeframes(args.timeframes),
+            )
+            run_pulse_app(config=config)
         except KeyboardInterrupt:
             print("\nInterrupted")
             sys.exit(0)
