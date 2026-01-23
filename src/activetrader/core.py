@@ -138,6 +138,7 @@ class FingerBlasterCore:
         self._last_health_check: float = 0.0
         self._health_check_interval: float = 10.0
         self._stale_data_warning_shown: bool = False
+        self._position_lock = asyncio.Lock()  # Lock for thread-safe position updates
 
     async def _on_ws_message(self, item: Dict[str, Any]) -> None:
         """Called by WebSocketManager when new book data arrives."""
@@ -392,8 +393,10 @@ class FingerBlasterCore:
                 asyncio.create_task(self._update_positions())
                 self._last_position_update = now_ts
 
-            yes_position = self._yes_position
-            no_position = self._no_position
+            # Thread-safe read of positions
+            async with self._position_lock:
+                yes_position = self._yes_position
+                no_position = self._no_position
             
             # Generate snapshot
             snapshot = await self.analytics_engine.generate_snapshot(
@@ -564,18 +567,27 @@ class FingerBlasterCore:
             logger.error(f"Error resolving strike: {e}", exc_info=True)
 
     async def _update_positions(self) -> None:
-        """Update cached positions from connector."""
+        """Update cached positions from connector (thread-safe)."""
         try:
             token_map = await self.market_manager.get_token_map()
             if not token_map: return
-            
+
+            # Fetch positions without lock (I/O operation)
+            positions = {}
             up_id = token_map.get('Up')
             if up_id:
-                self._yes_position = await self.connector.get_token_balance(up_id)
-                
+                positions['yes'] = await self.connector.get_token_balance(up_id)
+
             down_id = token_map.get('Down')
             if down_id:
-                self._no_position = await self.connector.get_token_balance(down_id)
+                positions['no'] = await self.connector.get_token_balance(down_id)
+
+            # Atomic update with lock (fast critical section)
+            async with self._position_lock:
+                if 'yes' in positions:
+                    self._yes_position = positions['yes']
+                if 'no' in positions:
+                    self._no_position = positions['no']
         except Exception as e:
             logger.debug(f"Error updating positions in background: {e}")
 

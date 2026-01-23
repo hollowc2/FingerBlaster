@@ -181,8 +181,8 @@ class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin
         if hasattr(self, 'session') and self.session:
             try:
                 self.session.close()
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Error closing sync session: {e}")
         if self.async_w3:
             # AsyncWeb3 providers don't need explicit cleanup in most cases
             pass

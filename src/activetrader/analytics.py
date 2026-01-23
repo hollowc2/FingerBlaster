@@ -96,7 +96,7 @@ class VolatilityWindow:
 
 class AnalyticsEngine:
     """High-performance analytics engine for binary options trading.
-    
+
     Provides real-time calculations for:
     - Basis points distance from strike
     - Fair value using binary option pricing
@@ -106,11 +106,15 @@ class AnalyticsEngine:
     - PnL tracking
     - Slippage estimation
     """
-    
+
     # Constants for calculations
     RISK_FREE_RATE = 0.0  # 0% as specified
     BPS_MULTIPLIER = 10000
     SECONDS_IN_YEAR = 365.25 * 24 * 60 * 60
+
+    # Probability bounds (binary options cannot be exactly 0 or 1)
+    MIN_PROBABILITY = 0.01  # Minimum fair value (1%)
+    MAX_PROBABILITY = 0.99  # Maximum fair value (99%)
     
     def __init__(self):
         """Initialize the analytics engine."""
@@ -218,11 +222,11 @@ class AnalyticsEngine:
             # N(d2) using standard normal CDF
             fv_yes = self._norm_cdf(d2)
             fv_no = 1.0 - fv_yes
-            
+
             # Clamp to valid probability range
-            fv_yes = max(0.01, min(0.99, fv_yes))
-            fv_no = max(0.01, min(0.99, fv_no))
-            
+            fv_yes = max(self.MIN_PROBABILITY, min(self.MAX_PROBABILITY, fv_yes))
+            fv_no = max(self.MIN_PROBABILITY, min(self.MAX_PROBABILITY, fv_no))
+
             return fv_yes, fv_no
             
         except (ValueError, ZeroDivisionError, OverflowError) as e:
