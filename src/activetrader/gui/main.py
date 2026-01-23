@@ -469,7 +469,7 @@ class TradingTUI(App):
             if not self.price_to_beat or self.price_to_beat in ('0.0', 'N/A', 'Pending', 'Loading', 'Dynamic', '--', 'None', ''):
                 await self._update_strike_from_market_data()
                 # Try to resolve if still pending
-                if self.price_to_beat in ('Pending', 'Dynamic', 'N/A', '--', 'None', ''):
+                if self.price_to_beat in ('Pending', 'Dynamic'):
                     await self.core._try_resolve_pending_strike()
 
     async def _update_market_status(self) -> None:
@@ -509,15 +509,22 @@ class TradingTUI(App):
                 except Exception: pass
 
             # Refresh price to beat
-            if self.price_to_beat and self.price_to_beat not in ('0.0', 'N/A', 'None'):
-                try:
-                    strike_float = float(str(self.price_to_beat).replace('$', '').replace(',', ''))
-                    strike_formatted = f"${strike_float:,.2f}"
-                    self.query_one("#price-to-beat-value", Static).update(strike_formatted)
-                except (ValueError, TypeError): pass
+            if self.price_to_beat:
+                # Special status values - display as-is
+                if self.price_to_beat in ('Pending', 'Dynamic', 'Loading'):
+                    try:
+                        self.query_one("#price-to-beat-value", Static).update(self.price_to_beat)
+                    except Exception: pass
+                elif self.price_to_beat not in ('0.0', 'N/A', 'None', ''):
+                    try:
+                        strike_float = float(str(self.price_to_beat).replace('$', '').replace(',', ''))
+                        strike_formatted = f"${strike_float:,.2f}"
+                        self.query_one("#price-to-beat-value", Static).update(strike_formatted)
+                    except (ValueError, TypeError): pass
 
-            # Refresh delta if both values are available
-            if self.btc_price > 0 and self.price_to_beat and self.price_to_beat not in ('0.0', 'N/A'):
+            # Refresh delta if both values are available and strike is numeric
+            if (self.btc_price > 0 and self.price_to_beat and
+                self.price_to_beat not in ('0.0', 'N/A', 'Pending', 'Dynamic', 'Loading', 'None', '')):
                 try:
                     strike = float(str(self.price_to_beat).replace('$', '').replace(',', ''))
                     self.delta_val = self.btc_price - strike
@@ -558,8 +565,9 @@ class TradingTUI(App):
             # Harmless during startup/shutdown
             logger.debug(f"Could not update BTC price widget (expected during transitions): {e}")
 
-        # Update delta if price to beat is available
-        if self.price_to_beat and self.price_to_beat not in ('0.0', 'N/A', 'None', 'Loading', 'Pending'):
+        # Update delta if price to beat is available and numeric
+        if (self.price_to_beat and
+            self.price_to_beat not in ('0.0', 'N/A', 'None', 'Loading', 'Pending', 'Dynamic', '')):
             try:
                 strike = float(str(self.price_to_beat).replace('$', '').replace(',', ''))
                 self.delta_val = price - strike
@@ -578,21 +586,26 @@ class TradingTUI(App):
             widgets = self.query("#price-to-beat-value")
             if widgets:
                 strike_widget = widgets.first()
-                if strike and strike not in ('0.0', 'N/A', 'None'):
+                # Special status values - display as-is without currency formatting
+                if strike in ('Pending', 'Dynamic', 'Loading'):
+                    strike_widget.update(strike)
+                elif strike and strike not in ('0.0', 'N/A', 'None', ''):
                     # Try to format as currency
                     try:
                         strike_float = float(str(strike).replace('$', '').replace(',', ''))
                         strike_formatted = f"${strike_float:,.2f}"
+                        strike_widget.update(strike_formatted)
                     except (ValueError, TypeError):
-                        strike_formatted = str(strike)
-                    strike_widget.update(strike_formatted)
+                        # If parsing fails, display as-is
+                        strike_widget.update(str(strike))
                 else:
                     strike_widget.update("N/A")
         except Exception as e:
             logger.debug(f"Error updating price to beat widget: {e}")
-        
-        # Recalculate delta if BTC price is available
-        if self.btc_price > 0:
+
+        # Recalculate delta if BTC price is available and strike is numeric
+        if (self.btc_price > 0 and strike and
+            strike not in ('Pending', 'Dynamic', 'Loading', 'N/A', 'None', '')):
             try:
                 strike_float = float(str(strike).replace('$', '').replace(',', ''))
                 self.delta_val = self.btc_price - strike_float
@@ -601,7 +614,7 @@ class TradingTUI(App):
                 delta_widget.query_one(".metric-value", Static).update(f"{sign}${self.delta_val:,.2f}")
                 self._update_delta_border(self.delta_val)
             except (ValueError, TypeError):
-                # Expected if strike is not a number (e.g. "Pending")
+                # Expected if strike parsing fails
                 pass
             except Exception as e:
                 logger.debug(f"Error updating delta in watch_price_to_beat: {e}")
@@ -792,12 +805,12 @@ class TradingTUI(App):
     def action_flatten(self) -> None:
         if self.core:
             # Run flatten in background so UI can update immediately
-            self.run_worker(self.core.flatten(), exclusive=False)
+            self.run_worker(self.core.flatten_all(), exclusive=False)
 
     def action_cancel_orders(self) -> None:
         if self.core:
             # Run cancel in background so UI can update immediately
-            self.run_worker(self.core.cancel_all(), exclusive=False)
+            self.run_worker(self.core.cancel_all_orders(), exclusive=False)
     
     async def action_toggle_positions(self) -> None:
         """Toggle position manager window."""

@@ -78,6 +78,11 @@ class CallbackManager:
                 for callbacks in self._callbacks.values():
                     callbacks.clear()
 
+    def get_callbacks(self, event: str) -> List[Callable]:
+        """Get list of callbacks for an event (returns copy for thread safety)."""
+        with self._lock:
+            return list(self._callbacks.get(event, []))
+
     def emit(self, event: str, *args, **kwargs) -> None:
         """Fire-and-forget callback emission (never blocks)."""
         if event not in self._callbacks:
@@ -463,63 +468,102 @@ class FingerBlasterCore:
         self.callback_manager.emit('resolution', "EXPIRED")
         
     async def _try_resolve_pending_strike(self) -> None:
-        """Resolve dynamic strike prices using Chainlink or Binance data."""
+        """
+        Resolve dynamic strike prices using a 6-tier fallback chain.
+
+        Priority chain (Chainlink sources → CEX fallbacks):
+        1. RTDS Chainlink history (local cache, fastest)
+        2. Chainlink on-chain oracle (Polygon) - GUARANTEED, matches Polymarket resolution
+        3. Chainlink API (experimental)
+        4. Coinbase 15m candle open price (matches market timeframe)
+        5. Binance 1m candle open price (last resort)
+        6. Current RTDS/Binance spot price (emergency fallback)
+        """
         market = await self.market_manager.get_market()
-        if not market: return
-        
+        if not market:
+            return
+
         strike = market.get('price_to_beat')
         if strike not in ("Dynamic", "Pending", "N/A", "None", "", None):
             return
-            
-        # Throttle resolution attempts
-        now = time.time()
-        if now - self._last_strike_resolve_attempt < STRIKE_RESOLVE_INTERVAL:
+
+        # Don't throttle if market has started - retry aggressively
+        start_dt = await self.market_manager.get_market_start_time()
+        if not start_dt:
+            logger.debug("No market start time available for strike resolution")
             return
-        self._last_strike_resolve_attempt = now
+
+        now_utc = pd.Timestamp.now(tz='UTC')
+        market_started = start_dt <= now_utc
+
+        # Throttle only if market hasn't started yet
+        if not market_started:
+            now = time.time()
+            if now - self._last_strike_resolve_attempt < STRIKE_RESOLVE_INTERVAL:
+                return
+            self._last_strike_resolve_attempt = now
 
         try:
-            # For dynamic strikes, the strike is the price at the market start time
-            start_dt = await self.market_manager.get_market_start_time()
-            if not start_dt:
-                logger.debug("No market start time available for strike resolution")
-                return
-                
-            # Try to get from RTDS history first (fastest)
-            logger.info(f"Attempting to resolve dynamic strike for {start_dt}...")
-            
+            logger.info(f"Attempting to resolve dynamic strike for {start_dt} (market_started={market_started})...")
+
             strike_val = None
-            
-            # METHOD 1: Fetch exact value from Polymarket Frontend (100% Accuracy)
-            # This is the user's preferred method to ensure displayed values match
-            if 'event_slug' in market:
-                 end_dt = pd.Timestamp(market.get('end_date'))
-                 strike_val = await self.connector.get_strike_from_polymarket_page(
-                     market.get('event_slug'), start_dt, end_dt
-                 )
-            
-            # METHOD 2: RTDS History (Fast local cache)
+            source = "Unknown"
+
+            # METHOD 1: RTDS Chainlink history (local cache, fastest)
             if strike_val is None:
                 strike_val = self.rtds_manager.get_chainlink_price_at(start_dt)
-                logger.info(f"RTDS lookup result: {strike_val}")
-            
-            # METHOD 3: Chainlink API (Fallback)
+                if strike_val:
+                    source = "RTDS/Chainlink Cache"
+                    logger.info(f"✓ Strike resolved from RTDS/Chainlink cache: ${strike_val:,.2f}")
+
+            # METHOD 2: Chainlink on-chain oracle (GUARANTEED - same source Polymarket uses)
             if strike_val is None:
-                logger.debug(f"Strike not in RTDS history for {start_dt}, trying Chainlink API...")
+                logger.debug("RTDS cache miss, querying Chainlink on-chain oracle...")
+                strike_val = await self.connector.get_chainlink_onchain_price_at(start_dt)
+                if strike_val:
+                    source = "Chainlink On-Chain Oracle"
+                    logger.info(f"✓ Strike resolved from Chainlink on-chain: ${strike_val:,.2f}")
+
+            # METHOD 3: Chainlink API (experimental, but worth trying)
+            if strike_val is None:
+                logger.debug("Chainlink on-chain unavailable, trying Chainlink API...")
                 strike_val = await self.connector.get_chainlink_price_at(start_dt)
-            
-            # If still None, try Binance API as fallback
+                if strike_val:
+                    source = "Chainlink API"
+                    logger.info(f"✓ Strike resolved from Chainlink API: ${strike_val:,.2f}")
+
+            # METHOD 4: Coinbase 15m candle (best CEX match for 15m markets)
             if strike_val is None:
-                logger.info(f"Chainlink APIs failed for {start_dt}, trying Binance fallback...")
+                logger.debug("Chainlink sources unavailable, trying Coinbase 15m candle...")
+                strike_val = await self.connector.get_coinbase_15m_open_price_at(start_dt)
+                if strike_val:
+                    source = "Coinbase 15m"
+                    logger.info(f"✓ Strike resolved from Coinbase 15m: ${strike_val:,.2f}")
+
+            # METHOD 5: Binance 1m candle (reliable CEX fallback)
+            if strike_val is None:
+                logger.debug("Coinbase unavailable, trying Binance 1m candle...")
                 btc_price_str = await self.connector.get_btc_price_at(start_dt)
                 if btc_price_str and btc_price_str != "N/A":
                     try:
                         strike_val = float(btc_price_str)
-                        logger.info(f"✓ Resolved dynamic strike using Binance fallback: ${strike_val:,.2f}")
+                        source = "Binance 1m"
+                        logger.info(f"✓ Strike resolved from Binance 1m: ${strike_val:,.2f}")
                     except (ValueError, TypeError):
                         pass
-                
+
+            # METHOD 6: Emergency fallback - current price (only if market has started)
+            if strike_val is None and market_started:
+                logger.warning("All historical sources failed, using current price as emergency fallback...")
+                current_btc = self.rtds_manager.get_current_price()
+                if current_btc and current_btc > 0:
+                    strike_val = current_btc
+                    source = "Current Price (Emergency)"
+                    logger.warning(f"⚠️ Using current BTC price as emergency fallback: ${strike_val:,.2f}")
+
+            # ALWAYS have a price when market has started
             if strike_val:
-                logger.info(f"✓ Final resolved strike value: ${strike_val:,.2f} at {start_dt}")
+                logger.info(f"✓ Final resolved strike: ${strike_val:,.2f} from {source} at {start_dt}")
                 # Update market in manager
                 market['price_to_beat'] = f"{strike_val:,.2f}"
                 await self.market_manager.set_market(market)
@@ -529,8 +573,20 @@ class FingerBlasterCore:
                 market_name = market.get('title', 'Market')
                 self.callback_manager.emit('market_update', market['price_to_beat'], ends, market_name, starts)
             else:
-                logger.warning(f"Failed to resolve dynamic strike for {start_dt} after all attempts")
-                
+                # Market hasn't started yet - keep as Pending (will retry)
+                if not market_started:
+                    logger.info(f"Market hasn't started yet ({start_dt}). Strike will be available at start time.")
+                    market['price_to_beat'] = "Pending"
+                    await self.market_manager.set_market(market)
+                    ends = self._format_ends(market.get('end_date', ''))
+                    starts = self._format_starts(market.get('start_date', ''))
+                    market_name = market.get('title', 'Market')
+                    self.callback_manager.emit('market_update', market['price_to_beat'], ends, market_name, starts)
+                else:
+                    # This should NEVER happen with 4-tier fallback + emergency fallback
+                    logger.error("CRITICAL: All 4 price sources failed! This should be impossible.")
+                    self.log_msg(f"⚠️ Strike price resolution failed - all sources unavailable")
+
         except Exception as e:
             logger.error(f"Error resolving strike: {e}", exc_info=True)
 

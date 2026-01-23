@@ -57,10 +57,49 @@ class NetworkConstants:
     DATA_API_URL = "https://data-api.polymarket.com"
     BINANCE_API_URL = "https://api.binance.com/api/v3"
     USDC_CONTRACT_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+    # Chainlink BTC/USD Price Feed on Polygon (used by Polymarket for resolution)
+    CHAINLINK_BTC_USD_FEED = "0xc907E116054Ad103354f2D350FD2514433D57F6f"
     REQUEST_TIMEOUT = 10
     MAX_RETRIES = 3
 
 logger = logging.getLogger("PolymarketConnector")
+
+# Minimal Chainlink Aggregator ABI for price queries
+CHAINLINK_AGGREGATOR_ABI = [
+    {
+        "inputs": [],
+        "name": "latestRoundData",
+        "outputs": [
+            {"name": "roundId", "type": "uint80"},
+            {"name": "answer", "type": "int256"},
+            {"name": "startedAt", "type": "uint256"},
+            {"name": "updatedAt", "type": "uint256"},
+            {"name": "answeredInRound", "type": "uint80"}
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [{"name": "_roundId", "type": "uint80"}],
+        "name": "getRoundData",
+        "outputs": [
+            {"name": "roundId", "type": "uint80"},
+            {"name": "answer", "type": "int256"},
+            {"name": "startedAt", "type": "uint256"},
+            {"name": "updatedAt", "type": "uint256"},
+            {"name": "answeredInRound", "type": "uint80"}
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "decimals",
+        "outputs": [{"name": "", "type": "uint8"}],
+        "stateMutability": "view",
+        "type": "function"
+    }
+]
 
 
 def validate_order_params(func: Callable[..., T]) -> Callable[..., T]:
@@ -1068,7 +1107,143 @@ class PolymarketConnector(HttpFetcherMixin, AsyncHttpFetcherMixin):
         except (KeyError, ValueError, IndexError) as e:
             logger.error(f"Error parsing historical BTC price: {e}")
             return "N/A"
-    
+
+    async def get_coinbase_15m_open_price_at(self, timestamp) -> Optional[float]:
+        """
+        Fetch BTC price from Coinbase 15m candle (fallback to Chainlink/RTDS).
+
+        Args:
+            timestamp: Timestamp to fetch price for (pandas Timestamp)
+
+        Returns:
+            Open price from Coinbase 15m candle, or None if unavailable
+        """
+        try:
+            # Check if we have Coinbase credentials configured
+            coinbase_key = os.getenv('COINBASE_API_KEY')
+            if not coinbase_key:
+                logger.debug("Coinbase API not configured, skipping")
+                return None
+
+            # Import and use Coinbase connector
+            from src.connectors.coinbase import CoinbaseConnector
+            coinbase = CoinbaseConnector()
+
+            try:
+                price = await coinbase.get_15m_open_price_at(timestamp)
+                return price
+            finally:
+                # Clean up async session
+                if hasattr(coinbase, 'async_session') and coinbase.async_session:
+                    try:
+                        if hasattr(coinbase.async_session, 'close'):
+                            await coinbase.async_session.close()
+                    except Exception as e:
+                        logger.debug(f"Error closing Coinbase session: {e}")
+
+        except ImportError:
+            logger.debug("CoinbaseConnector not available")
+        except Exception as e:
+            logger.error(f"Error using Coinbase connector: {e}")
+
+        return None
+
+    async def get_chainlink_onchain_price_at(self, timestamp: pd.Timestamp) -> Optional[float]:
+        """
+        Query Chainlink BTC/USD oracle on Polygon for historical price.
+
+        This queries the same Chainlink feed that Polymarket uses for resolution,
+        guaranteeing the strike price matches what will be used for market settlement.
+
+        Args:
+            timestamp: Timestamp to fetch price for (pandas Timestamp)
+
+        Returns:
+            BTC/USD price from Chainlink oracle, or None if unavailable
+        """
+        try:
+            await self._ensure_async_web3()
+
+            # Create contract instance
+            contract = self.async_w3.eth.contract(
+                address=Web3.to_checksum_address(NetworkConstants.CHAINLINK_BTC_USD_FEED),
+                abi=CHAINLINK_AGGREGATOR_ABI
+            )
+
+            # Get target timestamp in seconds
+            target_ts = int(timestamp.timestamp())
+
+            # Get latest round data
+            latest_round_data = await contract.functions.latestRoundData().call()
+            latest_round_id = latest_round_data[0]
+            latest_timestamp = latest_round_data[3]
+
+            # If target is after latest round, can't get future data
+            if target_ts > latest_timestamp:
+                logger.debug(f"Target timestamp {target_ts} is after latest round {latest_timestamp}")
+                return None
+
+            # Get decimals (Chainlink BTC/USD uses 8 decimals)
+            decimals = await contract.functions.decimals().call()
+
+            # Search backwards from latest round to find closest round to target timestamp
+            # Chainlink updates roughly every 20 seconds to 1 hour depending on price movement
+            # We'll search up to 1000 rounds back (covers ~10 hours at 36s/round average)
+            closest_round_id = None
+            closest_price = None
+            closest_diff = float('inf')
+            max_search_rounds = 1000
+
+            logger.info(f"Searching Chainlink oracle for price at {timestamp} (target_ts={target_ts})")
+
+            for i in range(max_search_rounds):
+                try:
+                    round_id = latest_round_id - i
+                    if round_id <= 0:
+                        break
+
+                    round_data = await contract.functions.getRoundData(round_id).call()
+                    round_timestamp = round_data[3]
+                    round_price = round_data[1]
+
+                    # Calculate time difference
+                    diff = abs(round_timestamp - target_ts)
+
+                    # If this round is closer, save it
+                    if diff < closest_diff:
+                        closest_diff = diff
+                        closest_round_id = round_id
+                        closest_price = round_price
+
+                        # If we found a round within 60 seconds, that's good enough
+                        if diff <= 60:
+                            break
+
+                    # If we've gone too far back in time (>1 hour past target), stop
+                    if round_timestamp < target_ts - 3600:
+                        break
+
+                except Exception as e:
+                    # Round might not exist or other error, continue searching
+                    logger.debug(f"Error querying round {round_id}: {e}")
+                    continue
+
+            if closest_price is not None:
+                # Convert from Chainlink decimals (8) to standard float
+                price = float(closest_price) / (10 ** decimals)
+                logger.info(
+                    f"✓ Chainlink on-chain: Found price ${price:,.2f} at round {closest_round_id} "
+                    f"(diff: {closest_diff}s from target)"
+                )
+                return price
+            else:
+                logger.warning(f"Could not find Chainlink price near timestamp {timestamp}")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error querying Chainlink on-chain oracle: {e}")
+            return None
+
     def _generate_headers(self, method: str, path: str, body: str = None) -> Dict[str, str]:
         """
         Generate authentication headers for API requests.

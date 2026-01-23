@@ -1101,6 +1101,63 @@ class CoinbaseConnector(AsyncHttpFetcherMixin):
             logger.error(f"Unexpected error fetching candles: {e}")
             return []
 
+    async def get_15m_open_price_at(self, timestamp, product_id: str = "BTC-USD") -> Optional[float]:
+        """
+        Fetch the open price of the 15-minute candle containing the given timestamp.
+
+        Args:
+            timestamp: Timestamp to fetch price for (pandas Timestamp or datetime)
+            product_id: Product ID (default: "BTC-USD")
+
+        Returns:
+            Open price of the 15m candle, or None if unavailable
+        """
+        try:
+            # Ensure async session is initialized
+            await self._ensure_async_session()
+
+            # Convert to UNIX seconds
+            import pandas as pd
+            if isinstance(timestamp, pd.Timestamp):
+                unix_seconds = int(timestamp.timestamp())
+            else:
+                unix_seconds = int(timestamp.timestamp())
+
+            # Fetch 15m candle containing this timestamp
+            # Request 2 candles for safety (one before, one after)
+            candles = await self.get_candles(
+                product_id=product_id,
+                granularity=CoinbaseGranularity.FIFTEEN_MINUTE,
+                start=unix_seconds - 900,  # 15 min before
+                end=unix_seconds + 900,    # 15 min after
+                limit=2
+            )
+
+            if not candles or len(candles) == 0:
+                return None
+
+            # Find candle containing our timestamp
+            for candle in candles:
+                candle_start = candle.get('start', 0)
+                candle_end = candle_start + 900  # 15 minutes
+                if candle_start <= unix_seconds < candle_end:
+                    open_price = float(candle.get('open', 0))
+                    if open_price > 0:
+                        logger.info(f"✓ Coinbase 15m candle open price: ${open_price:,.2f} at {timestamp}")
+                        return open_price
+
+            # If no exact match, use the first candle
+            if candles:
+                open_price = float(candles[0].get('open', 0))
+                if open_price > 0:
+                    logger.warning(f"Using nearest Coinbase candle open price: ${open_price:,.2f}")
+                    return open_price
+
+        except Exception as e:
+            logger.error(f"Error fetching Coinbase 15m candle: {e}")
+
+        return None
+
     async def get_public_product(self, product_id: str) -> Optional[Dict[str, Any]]:
         """
         Get product details including 24h volume, price changes, and other market data.
