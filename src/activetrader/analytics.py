@@ -93,18 +93,13 @@ class AnalyticsEngine:
         self._vol_window = VolatilityWindow()
         self._last_update = 0.0
         self._update_throttle = 0.1  # 100ms minimum between updates
-        
-        # Cached values
-        self._cached_snapshot: Optional[AnalyticsSnapshot] = None
-        self._cache_timestamp = 0.0
-        self._cache_ttl = 0.05  # 50ms cache
-        
+
         # Oracle lag tracking
         self._chainlink_price: Optional[float] = None
         self._chainlink_timestamp: Optional[float] = None
         self._cex_price: Optional[float] = None
         self._cex_timestamp: Optional[float] = None
-        
+
         self._lock = asyncio.Lock()
 
     def calculate_basis_points(

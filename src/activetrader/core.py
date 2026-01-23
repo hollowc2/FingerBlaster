@@ -18,27 +18,33 @@ from src.activetrader.analytics import AnalyticsEngine, AnalyticsSnapshot, Timer
 
 logger = logging.getLogger("FingerBlaster")
 
+# System Constants
+POSITION_UPDATE_INTERVAL = 5.0  # Seconds between position API calls
+STRIKE_RESOLVE_INTERVAL = 2.0   # Seconds between strike resolution attempts
+PRICE_CACHE_TTL = 0.1           # Seconds to cache price calculations
+HEALTH_CHECK_INTERVAL = 10.0    # Seconds between data health checks
+
 CALLBACK_EVENTS: Tuple[str, ...] = (
-    'market_update',      
-    'btc_price_update',   
-    'price_update',       
+    'market_update',
+    'btc_price_update',
+    'price_update',
     'account_stats_update',
-    'countdown_update',   
+    'countdown_update',
     'prior_outcomes_update',
-    'resolution',         
-    'log',               
-    'chart_update',      
-    'analytics_update',  
-    'order_submitted',   
-    'order_filled',      
-    'order_failed',      
-    'flatten_started',   
-    'flatten_completed', 
-    'flatten_failed',    
-    'cancel_started',    
-    'cancel_completed',  
-    'cancel_failed',     
-    'size_changed',      
+    'resolution',
+    'log',
+    'chart_update',
+    'analytics_update',
+    'order_submitted',
+    'order_filled',
+    'order_failed',
+    'flatten_started',
+    'flatten_completed',
+    'flatten_failed',
+    'cancel_started',
+    'cancel_completed',
+    'cancel_failed',
+    'size_changed',
 )
 
 class CallbackManager:
@@ -47,8 +53,7 @@ class CallbackManager:
             event: [] for event in CALLBACK_EVENTS
         }
         self._lock = threading.Lock()
-        self._async_lock = asyncio.Lock()
-    
+
     def register(self, event: str, callback: Callable) -> bool:
         if event not in self._callbacks:
             return False
@@ -58,31 +63,32 @@ class CallbackManager:
         return True
 
     def unregister(self, event: str, callback: Callable) -> bool:
-        if event not in self._callbacks: return False
+        if event not in self._callbacks:
+            return False
         with self._lock:
             if callback in self._callbacks[event]:
                 self._callbacks[event].remove(callback)
-            return True
+        return True
 
     def clear(self, event: Optional[str] = None) -> None:
         with self._lock:
-            if event:
-                if event in self._callbacks: self._callbacks[event].clear()
-            else:
-                for callbacks in self._callbacks.values(): callbacks.clear()
+            if event and event in self._callbacks:
+                self._callbacks[event].clear()
+            elif not event:
+                for callbacks in self._callbacks.values():
+                    callbacks.clear()
 
-    def get_callbacks(self, event: str) -> List[Callable]:
-        with self._lock: return list(self._callbacks.get(event, []))
-
-    async def emit(self, event: str, *args, **kwargs) -> None:
-        if event not in self._callbacks: return
-        async with self._async_lock:
+    def emit(self, event: str, *args, **kwargs) -> None:
+        """Fire-and-forget callback emission (never blocks)."""
+        if event not in self._callbacks:
+            return
+        with self._lock:
             callbacks = list(self._callbacks[event])
+
         for callback in callbacks:
             try:
                 if asyncio.iscoroutinefunction(callback):
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(callback(*args, **kwargs))
+                    asyncio.create_task(callback(*args, **kwargs))
                 else:
                     callback(*args, **kwargs)
             except Exception as e:
@@ -115,23 +121,17 @@ class FingerBlasterCore:
         self.last_resolution: Optional[str] = None
         self.last_chart_update: float = 0.0
         self.selected_size: float = 1.0
-        self._cex_btc_price: Optional[float] = None
-        self._cex_btc_timestamp: float = 0.0
         self._yes_position: float = 0.0
         self._no_position: float = 0.0
         self._last_position_update: float = 0.0
-        self._position_update_interval: float = 5.0  # Only update positions every 5 seconds
         self._last_strike_resolve_attempt: float = 0.0
-        self._strike_resolve_interval: float = 2.0  # Faster resolution (2s instead of 10s)
-        
-        # State & Caching
+
+        # Caching & Health
         self._cached_prices: Optional[Tuple[float, float, float, float]] = None
         self._cache_timestamp: float = 0.0
-        self._cache_ttl: float = 0.1
         self._last_health_check: float = 0.0
-        self._health_check_interval: float = 10.0
         self._stale_data_warning_shown: bool = False
-        self._position_lock = asyncio.Lock()  # Lock for thread-safe position updates
+        self._position_lock = asyncio.Lock()
 
     async def _on_ws_message(self, item: Dict[str, Any]) -> None:
         await self._recalc_price()
@@ -140,7 +140,7 @@ class FingerBlasterCore:
         now = time.time()
 
         # Check for stale data
-        if now - self._last_health_check >= self._health_check_interval:
+        if now - self._last_health_check >= HEALTH_CHECK_INTERVAL:
             await self._check_data_health()
             self._last_health_check = now
 
@@ -150,7 +150,7 @@ class FingerBlasterCore:
         self._cache_timestamp = now
 
         # Notify UI
-        self._emit('price_update', *prices)
+        self.callback_manager.emit('price_update', *prices)
 
     async def _check_data_health(self) -> None:
         is_stale = await self.market_manager.is_data_stale()
@@ -165,49 +165,38 @@ class FingerBlasterCore:
     def register_callback(self, event: str, callback: Callable) -> bool:
         return self.callback_manager.register(event, callback)
 
-    def _emit(self, event: str, *args, **kwargs) -> None:
-        callbacks = self.callback_manager.get_callbacks(event)
-        for callback in callbacks:
-            try:
-                if asyncio.iscoroutinefunction(callback):
-                    asyncio.create_task(callback(*args, **kwargs))
-                else:
-                    callback(*args, **kwargs)
-            except Exception as e:
-                logger.error(f"Error in callback {event}: {e}")
-
     def log_msg(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self._emit('log', f"[{timestamp}] {message}")
+        self.callback_manager.emit('log', f"[{timestamp}] {message}")
 
     async def start_rtds(self) -> None:
         await self.rtds_manager.start()
         await self.ws_manager.start()
 
     async def _on_rtds_btc_price(self, btc_price: float) -> None:
-        self._emit('btc_price_update', btc_price)
+        self.callback_manager.emit('btc_price_update', btc_price)
 
     def size_up(self) -> None:
         self.selected_size += 1.0
-        self._emit('size_changed', self.selected_size)
+        self.callback_manager.emit('size_changed', self.selected_size)
 
     def size_down(self) -> None:
         self.selected_size = max(1.0, self.selected_size - 1.0)
-        self._emit('size_changed', self.selected_size)
+        self.callback_manager.emit('size_changed', self.selected_size)
 
     async def place_order(self, side: str) -> None:
         self.log_msg(f"Action: PLACE ORDER {side} (${self.selected_size})")
         
         # Initial submission event
         # Use 0.0 as a placeholder for price as it's a market order
-        self._emit('order_submitted', side, self.selected_size, 0.0)
+        self.callback_manager.emit('order_submitted', side, self.selected_size, 0.0)
         
         try:
             token_map = await self.market_manager.get_token_map()
             if not token_map:
                 error = "Token map not ready"
                 self.log_msg(f"Order error: {error}")
-                self._emit('order_failed', side, self.selected_size, error)
+                self.callback_manager.emit('order_failed', side, self.selected_size, error)
                 return
 
             # Execute order
@@ -227,7 +216,7 @@ class FingerBlasterCore:
                 # If side is Up, use yes_price. If Down, use no_price.
                 fill_price = prices[0] if side == 'Up' else prices[1]
                 
-                self._emit('order_filled', side, self.selected_size, fill_price, order_id)
+                self.callback_manager.emit('order_filled', side, self.selected_size, fill_price, order_id)
                 self.log_msg(f"✓ {side} order filled: {order_id}")
                 
                 # Force position update soon
@@ -235,19 +224,16 @@ class FingerBlasterCore:
             else:
                 error = "Order rejected by exchange"
                 self.log_msg(f"Order error: {error}")
-                self._emit('order_failed', side, self.selected_size, error)
+                self.callback_manager.emit('order_failed', side, self.selected_size, error)
                 
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Error placing order: {e}", exc_info=True)
-            self._emit('order_failed', side, self.selected_size, error_msg)
-
-    async def flatten(self) -> None:
-        await self.flatten_all()
+            self.callback_manager.emit('order_failed', side, self.selected_size, error_msg)
 
     async def flatten_all(self) -> None:
         self.log_msg("Action: FLATTEN ALL")
-        self._emit('flatten_started')
+        self.callback_manager.emit('flatten_started')
         await asyncio.sleep(0)  # Yield control to let UI update
         
         try:
@@ -255,7 +241,7 @@ class FingerBlasterCore:
             if not token_map:
                 error_msg = "Error: Token map not ready."
                 self.log_msg(error_msg)
-                self._emit('flatten_failed', error_msg)
+                self.callback_manager.emit('flatten_failed', error_msg)
                 return
             
             results = await self.order_executor.flatten_positions(token_map)
@@ -266,35 +252,32 @@ class FingerBlasterCore:
             else:
                 self.log_msg("Flatten completed. No positions to flatten.")
             
-            self._emit('flatten_completed', orders_processed)
+            self.callback_manager.emit('flatten_completed', orders_processed)
         except Exception as e:
             error_msg = f"Flatten error: {e}"
             self.log_msg(error_msg)
             logger.error(f"Flatten error: {e}", exc_info=True)
-            self._emit('flatten_failed', error_msg)
-
-    async def cancel_all(self) -> bool:
-        return await self.cancel_all_orders()
+            self.callback_manager.emit('flatten_failed', error_msg)
 
     async def cancel_all_orders(self) -> bool:
         self.log_msg("Action: CANCEL ALL ORDERS")
-        self._emit('cancel_started')
+        self.callback_manager.emit('cancel_started')
         await asyncio.sleep(0)  # Yield control to let UI update
         
         try:
             result = await self.order_executor.cancel_all_orders()
             if result:
                 self.log_msg("All orders cancelled successfully.")
-                self._emit('cancel_completed')
+                self.callback_manager.emit('cancel_completed')
             else:
                 self.log_msg("No orders to cancel or cancellation failed.")
-                self._emit('cancel_completed')
+                self.callback_manager.emit('cancel_completed')
             return result
         except Exception as e:
             error_msg = f"Cancel all error: {e}"
             self.log_msg(error_msg)
             logger.error(f"Cancel all error: {e}", exc_info=True)
-            self._emit('cancel_failed', error_msg)
+            self.callback_manager.emit('cancel_failed', error_msg)
             return False
 
     async def _attempt_auto_reconnect(self) -> None:
@@ -332,7 +315,7 @@ class FingerBlasterCore:
             # Use analytics engine for urgency logic
             urgency = self.analytics_engine.get_timer_urgency(time_remaining)
             
-            self._emit('countdown_update', time_str, urgency, time_remaining)
+            self.callback_manager.emit('countdown_update', time_str, urgency, time_remaining)
             
             # Check for resolution
             if time_remaining <= 0 and not self.resolution_shown:
@@ -371,7 +354,7 @@ class FingerBlasterCore:
             
             # Get positions (cached to avoid excessive API calls)
             now_ts = time.time()
-            if now_ts - self._last_position_update >= self._position_update_interval:
+            if now_ts - self._last_position_update >= POSITION_UPDATE_INTERVAL:
                 # Trigger background update of positions
                 asyncio.create_task(self._update_positions())
                 self._last_position_update = now_ts
@@ -397,18 +380,20 @@ class FingerBlasterCore:
                 order_size_usd=self.selected_size
             )
             
-            self._emit('analytics_update', snapshot)
+            self.callback_manager.emit('analytics_update', snapshot)
         except Exception as e:
             logger.error(f"Error updating analytics: {e}", exc_info=True)
 
     def _parse_price_to_beat(self, strike_str: str) -> float:
-        if not strike_str: return 0.0
+        if not strike_str:
+            return 0.0
         try:
             clean = strike_str.replace('$', '').replace(',', '').strip()
             if not clean or clean in ('N/A', 'Pending', 'Loading', '--', 'None', ''):
                 return 0.0
             return float(clean)
-        except: return 0.0
+        except (ValueError, AttributeError):
+            return 0.0
 
     async def update_market_status(self) -> None:
         """Poll for active market and handle discovery."""
@@ -445,7 +430,7 @@ class FingerBlasterCore:
         ends = self._format_ends(market.get('end_date', ''))
         starts = self._format_starts(market.get('start_date', ''))
         market_name = market.get('title', 'Market')
-        self._emit('market_update', market.get('price_to_beat', 'N/A'), ends, market_name, starts)
+        self.callback_manager.emit('market_update', market.get('price_to_beat', 'N/A'), ends, market_name, starts)
 
         # Immediately try to resolve strike if dynamic
         if market.get('price_to_beat') in ('Dynamic', 'Pending', 'N/A', '', None):
@@ -475,7 +460,7 @@ class FingerBlasterCore:
         """Handle market expiry and emit resolution event."""
         self.resolution_shown = True
         self.log_msg("⚠️ MARKET EXPIRED - Waiting for resolution...")
-        self._emit('resolution', "EXPIRED")
+        self.callback_manager.emit('resolution', "EXPIRED")
         
     async def _try_resolve_pending_strike(self) -> None:
         """Resolve dynamic strike prices using Chainlink or Binance data."""
@@ -488,7 +473,7 @@ class FingerBlasterCore:
             
         # Throttle resolution attempts
         now = time.time()
-        if now - self._last_strike_resolve_attempt < self._strike_resolve_interval:
+        if now - self._last_strike_resolve_attempt < STRIKE_RESOLVE_INTERVAL:
             return
         self._last_strike_resolve_attempt = now
 
@@ -542,7 +527,7 @@ class FingerBlasterCore:
                 ends = self._format_ends(market.get('end_date', ''))
                 starts = self._format_starts(market.get('start_date', ''))
                 market_name = market.get('title', 'Market')
-                self._emit('market_update', market['price_to_beat'], ends, market_name, starts)
+                self.callback_manager.emit('market_update', market['price_to_beat'], ends, market_name, starts)
             else:
                 logger.warning(f"Failed to resolve dynamic strike for {start_dt} after all attempts")
                 

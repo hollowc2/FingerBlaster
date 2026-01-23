@@ -213,6 +213,30 @@ class LadderCore:
         self.dirty = True
         return canceled_count
 
+    def _extract_order_id(self, order_resp: Any) -> Optional[str]:
+        """Extract order ID from various response formats."""
+        if not order_resp:
+            return None
+        if isinstance(order_resp, dict):
+            return (
+                order_resp.get('orderID') or
+                order_resp.get('order_id') or
+                order_resp.get('id') or
+                order_resp.get('hash')
+            )
+        return None
+
+    async def _get_target_token(self, side: str) -> Optional[str]:
+        """Get target token ID for given side."""
+        token_map = await self.fb.market_manager.get_token_map()
+        if not token_map:
+            logger.error("No token map available")
+            return None
+        target_token = token_map.get('Up' if side == "YES" else 'Down')
+        if not target_token:
+            logger.error(f"No target token found for side={side}")
+        return target_token
+
     async def place_limit_order(self, price_cent: int, size: float, side: str) -> Optional[str]:
         """Translates a Ladder click into a signed Polymarket limit order."""
         temp_id = f"tmp_{price_cent}_{asyncio.get_event_loop().time()}"
@@ -220,17 +244,8 @@ class LadderCore:
         self.dirty = True
 
         try:
-            token_map = await self.fb.market_manager.get_token_map()
-            if not token_map:
-                logger.error("No token map available - cannot place order")
-                self.pending_orders.pop(temp_id, None)
-                return None
-            
-            # Logic: Buy YES = Buy Up Token. Buy NO = Buy Down Token.
-            target_token = token_map.get('Up' if side == "YES" else 'Down')
-            
+            target_token = await self._get_target_token(side)
             if not target_token:
-                logger.error(f"No target token found for side={side}, token_map={token_map}")
                 self.pending_orders.pop(temp_id, None)
                 return None
             
@@ -275,22 +290,8 @@ class LadderCore:
             )
             
             logger.info(f"Order response: {order_resp}")
-            
-            if not order_resp:
-                logger.error("Order response is None - order may have failed")
-                self.pending_orders.pop(temp_id, None)
-                return None
-            
-            # Check for orderID in various possible formats
-            order_id = None
-            if isinstance(order_resp, dict):
-                order_id = (
-                    order_resp.get('orderID') or 
-                    order_resp.get('order_id') or 
-                    order_resp.get('id') or
-                    order_resp.get('hash')  # Some APIs return hash
-                )
-            
+
+            order_id = self._extract_order_id(order_resp)
             if order_id:
                 logger.info(f"Order placed successfully: {order_id}")
                 self.pending_orders[order_id] = self.pending_orders.pop(temp_id)
@@ -308,57 +309,32 @@ class LadderCore:
 
     async def place_market_order(self, size: float, side: str) -> Optional[str]:
         """Place a market order (BUY YES or BUY NO).
-        
+
         Args:
             size: Order size in USDC
             side: 'YES' or 'NO'
-            
+
         Returns:
             Order ID if successful, None otherwise
         """
         try:
-            token_map = await self.fb.market_manager.get_token_map()
-            if not token_map:
-                logger.error("No token map available - cannot place order")
-                return None
-            
-            # Logic: Buy YES = Buy Up Token. Buy NO = Buy Down Token.
-            target_token = token_map.get('Up' if side == "YES" else 'Down')
-            
+            target_token = await self._get_target_token(side)
             if not target_token:
-                logger.error(f"No target token found for side={side}, token_map={token_map}")
                 return None
-            
+
             logger.info(f"Placing market {side} order: token={target_token[:20]}..., size=${size:.2f}")
 
-            # create_market_order is already async, so await it directly
-            order_resp = await self.fb.connector.create_market_order(
-                target_token, size, 'BUY'
-            )
-            
+            order_resp = await self.fb.connector.create_market_order(target_token, size, 'BUY')
             logger.info(f"Market order response: {order_resp}")
-            
-            if not order_resp:
-                logger.error("Market order response is None - order may have failed")
-                return None
-            
-            # Check for orderID in various possible formats
-            order_id = None
-            if isinstance(order_resp, dict):
-                order_id = (
-                    order_resp.get('orderID') or 
-                    order_resp.get('order_id') or 
-                    order_resp.get('id') or
-                    order_resp.get('hash')
-                )
-            
+
+            order_id = self._extract_order_id(order_resp)
             if order_id:
                 logger.info(f"Market order placed successfully: {order_id}")
                 return order_id
             else:
                 logger.error(f"Market order response missing orderID. Full response: {order_resp}")
                 return None
-                
+
         except Exception as e:
             logger.error(f"Market Order Placement Error: {e}", exc_info=True)
             return None
@@ -452,11 +428,13 @@ class LadderCore:
     def _format_market_display(self, name: str, ends: str) -> str:
         """Legacy method - kept for backward compatibility."""
         try:
-            if not ends or ends == 'N/A': return name
+            if not ends or ends == 'N/A':
+                return name
             dt = pd.Timestamp(ends).tz_localize('UTC').tz_convert('US/Eastern')
             time_str = dt.strftime("%B %d, %I:%M%p ET")
             return f"{name} - {time_str}"
-        except: return name
+        except (ValueError, AttributeError):
+            return name
 
     def set_market_update_callback(self, callback: Optional[Callable[[str, str, str], None]]) -> None:
         """Set callback for market updates - receives (name, starts, ends)."""
