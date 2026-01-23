@@ -1,5 +1,3 @@
-"""Async HTTP fetcher mixin using aiohttp."""
-
 import logging
 import aiohttp
 from typing import Dict, List, Optional, Any
@@ -12,13 +10,11 @@ DEFAULT_MAX_RETRIES = 3
 
 
 class AsyncHttpFetcherMixin:
-    """Async HTTP request/response handling using aiohttp."""
 
     async def _create_async_session(
         self,
         max_retries: int = DEFAULT_MAX_RETRIES
     ) -> aiohttp.ClientSession:
-        """Create aiohttp session with retry strategy."""
         timeout = aiohttp.ClientTimeout(total=DEFAULT_REQUEST_TIMEOUT)
         connector = aiohttp.TCPConnector(limit=10, limit_per_host=10)
 
@@ -41,7 +37,6 @@ class AsyncHttpFetcherMixin:
         timeout: int = DEFAULT_REQUEST_TIMEOUT,
         raise_for_status: bool = True
     ) -> Optional[Dict[str, Any]]:
-        """Execute async GET request and parse JSON."""
         try:
             async with self.async_session.get(url, params=params) as response:
                 if raise_for_status:
@@ -60,7 +55,6 @@ class AsyncHttpFetcherMixin:
         param_variants: List[Dict[str, Any]],
         timeout: int = DEFAULT_REQUEST_TIMEOUT
     ) -> Optional[Dict[str, Any]]:
-        """Try multiple parameter formats until one succeeds (async)."""
         for i, params in enumerate(param_variants, 1):
             try:
                 async with self.async_session.get(url, params=params) as response:

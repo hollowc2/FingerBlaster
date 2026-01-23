@@ -1,10 +1,3 @@
-# Refactored Pulse Core – Textual-safe, non-blocking
-# Key guarantees:
-# - UI callbacks are fire-and-forget
-# - Indicator math runs off the UI event loop
-# - Order book updates are throttled
-# - Shutdown and resize are always responsive
-
 import asyncio
 import contextlib
 import logging
@@ -29,9 +22,6 @@ from src.pulse.indicators import IndicatorEngine
 
 logger = logging.getLogger("Pulse.Core")
 
-# -----------------------------------------------------------------------------
-# Async Event Bus (never blocks UI)
-# -----------------------------------------------------------------------------
 
 class AsyncEventBus:
     def __init__(self):
@@ -50,9 +40,6 @@ class AsyncEventBus:
             except Exception:
                 logger.exception("event handler error")
 
-# -----------------------------------------------------------------------------
-# Indicator Worker (CPU isolation)
-# -----------------------------------------------------------------------------
 
 class IndicatorWorker:
     def __init__(self, engine: IndicatorEngine):
@@ -83,9 +70,6 @@ class IndicatorWorker:
             except Exception:
                 logger.exception("Indicator update failed")
 
-# -----------------------------------------------------------------------------
-# Throttled Order Book Wrapper
-# -----------------------------------------------------------------------------
 
 class ThrottledOrderBookBucketer(OrderBookBucketer):
     def __init__(self, *args, emit_hz: float = 20.0, **kwargs):
@@ -100,9 +84,6 @@ class ThrottledOrderBookBucketer(OrderBookBucketer):
         self._last_emit = now
         return await super()._rebuild_bucketed_book()
 
-# -----------------------------------------------------------------------------
-# Pulse Core
-# -----------------------------------------------------------------------------
 
 class PulseCore:
     def __init__(self, config: Optional[PulseConfig] = None):
@@ -125,13 +106,7 @@ class PulseCore:
             on_alert=self._on_alert,
         )
         self._indicator_worker = IndicatorWorker(self._indicator_engine)
-
-        # Task for periodic 24h stats updates
         self._stats_update_task: Optional[asyncio.Task] = None
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
 
     async def start(self):
         if self._running:
@@ -185,10 +160,6 @@ class PulseCore:
 
         await self._indicator_worker.stop()
 
-    # ------------------------------------------------------------------
-    # Init
-    # ------------------------------------------------------------------
-
     def _init_product(self, product_id: str):
         self._trade_history[product_id] = deque(maxlen=self.config.trade_history_size)
 
@@ -209,15 +180,6 @@ class PulseCore:
         )
 
     def _aggregate_to_4h(self, two_hour_candles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Aggregate TWO_HOUR candles into FOUR_HOUR candles.
-
-        Args:
-            two_hour_candles: List of 2-hour candles (sorted by timestamp)
-
-        Returns:
-            List of 4-hour candles
-        """
         if len(two_hour_candles) < 2:
             return []
 
@@ -241,12 +203,6 @@ class PulseCore:
         return four_hour_candles
 
     async def _prime_historical_data(self):
-        """
-        Prime indicators with historical data before starting live WebSocket.
-
-        Fetches historical candles for each enabled timeframe and feeds them
-        through the indicator engine to warm up calculations.
-        """
         if not self._connector:
             logger.warning("Cannot prime historical data: connector not initialized")
             return
@@ -329,10 +285,6 @@ class PulseCore:
                 logger.error(f"Failed to prime {product_id}: {e}", exc_info=True)
 
         logger.info("Historical data priming complete")
-
-    # ------------------------------------------------------------------
-    # WebSocket Handlers
-    # ------------------------------------------------------------------
 
     async def _on_trade(self, raw: Dict[str, Any]):
         ts = datetime.fromisoformat(raw["time"].replace("Z", "+00:00")).timestamp()
@@ -423,15 +375,12 @@ class PulseCore:
         self.bus.emit("ticker", ticker)
 
     async def _on_connection_status(self, connected: bool, message: str):
-        """Handle WebSocket connection status changes."""
         self.bus.emit("connection", connected, message)
 
     async def _on_orderbook_update(self, product_id: str, book: BucketedOrderBook):
-        """Handle order book updates."""
         self.bus.emit("orderbook", product_id, book)
 
     async def _update_24h_stats(self):
-        """Fetch 24h stats from REST API and update tickers with volume data."""
         if not self._connector:
             return
 
@@ -537,7 +486,6 @@ class PulseCore:
                 logger.warning(f"Failed to fetch stats for {product_id}: {e}", exc_info=True)
 
     async def _periodic_stats_update(self):
-        """Periodically fetch 24h stats from REST API to update volume data."""
         # Wait for initial ticker data to be available
         await asyncio.sleep(5)
 
@@ -559,11 +507,7 @@ class PulseCore:
                 break
             except Exception as e:
                 logger.error(f"Error in periodic stats update: {e}")
-                await asyncio.sleep(30)  # Wait before retrying
-
-    # ------------------------------------------------------------------
-    # Candle Handlers
-    # ------------------------------------------------------------------
+                await asyncio.sleep(30)
 
     async def _on_10s_candle(self, product_id: str, candle: Candle):
         self._indicator_worker.submit(product_id, candle)
@@ -574,33 +518,21 @@ class PulseCore:
         self._indicator_worker.submit(product_id, candle)
         self.bus.emit("candle", product_id, candle)
 
-    # ------------------------------------------------------------------
-    # Indicator + Alerts
-    # ------------------------------------------------------------------
-
     async def _on_indicator_snapshot(self, snapshot: IndicatorSnapshot):
         self.bus.emit("indicator", snapshot)
 
     async def _on_alert(self, alert: Alert):
         self.bus.emit("alert", alert)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def on(self, event: str, cb: Callable):
-        """Register event callback."""
         self.bus.on(event, cb)
 
     def get_recent_trades(self, product_id: str, limit: int = 15) -> list:
-        """Get recent trades for a product."""
         history = self._trade_history.get(product_id, [])
         return list(history)[-limit:] if history else []
 
     def get_latest_ticker(self, product_id: str) -> Optional[Ticker]:
-        """Get latest ticker data for a product."""
         return self._tickers.get(product_id)
 
     def get_indicator_snapshot(self, product_id: str, timeframe: Timeframe) -> Optional[IndicatorSnapshot]:
-        """Get latest indicator snapshot for a product and timeframe."""
         return self._indicator_engine.get_snapshot(product_id, timeframe)

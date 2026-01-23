@@ -32,16 +32,13 @@ from py_clob_client.clob_types import (
 )
 from py_clob_client.order_builder.constants import BUY, SELL
 
-from src.connectors.base import DataConnector
 from src.connectors.http_mixin import HttpFetcherMixin
 from src.connectors.async_http_mixin import AsyncHttpFetcherMixin
 from src.connectors.polymarket_api import PolymarketAPI, SignatureType
 
 load_dotenv()
 
-# Constants - Extract magic numbers to named constants
 class TradingConstants:
-    """Trading-related constants."""
     MAX_PRICE = 0.99
     MIN_PRICE = 0.01
     BUY_AGGRESSIVE_MULTIPLIER = 1.10
@@ -53,7 +50,6 @@ class TradingConstants:
     PRICE_ROUNDING_PLACES = 2
 
 class NetworkConstants:
-    """Network and API constants."""
     POLYGON_CHAIN_ID = 137
     POLYGON_RPC_URL = "https://polygon-rpc.com"
     CLOB_HOST = "https://clob.polymarket.com"
@@ -64,64 +60,28 @@ class NetworkConstants:
     REQUEST_TIMEOUT = 10
     MAX_RETRIES = 3
 
-# Configure logger
 logger = logging.getLogger("PolymarketConnector")
 
 
 def validate_order_params(func: Callable[..., T]) -> Callable[..., T]:
-    """Decorator to validate order parameters before execution.
-
-    Validates token_id, amount/size, and side parameters to prevent
-    invalid orders from being submitted to the API.
-
-    Args:
-        func: The order function to wrap
-
-    Returns:
-        Wrapped function with input validation
-    """
     @wraps(func)
     async def wrapper(self, token_id: str, amount: float, side: str, *args, **kwargs) -> T:
-        # Validate token_id format (should be non-empty string)
-        if not token_id or not isinstance(token_id, str):
-            logger.error(f"Invalid token_id: {token_id} (type: {type(token_id)})")
+        if not token_id or len(token_id) < 10:
+            logger.error(f"Invalid token_id: {token_id}")
             return None
-
-        # Token IDs are typically long hex strings
-        if len(token_id) < 10:
-            logger.error(f"Token ID appears too short: {token_id}")
+        if amount <= 0 or amount > 1_000_000:
+            logger.error(f"Invalid amount: {amount}")
             return None
-
-        # Validate amount
-        if not isinstance(amount, (int, float)):
-            logger.error(f"Invalid amount type: {type(amount)}")
-            return None
-
-        if amount <= 0:
-            logger.error(f"Invalid amount: {amount} (must be positive)")
-            return None
-
-        if amount > 1_000_000:  # Sanity check - $1M max order
-            logger.error(f"Amount exceeds sanity limit: {amount}")
-            return None
-
-        # Validate side
-        if not isinstance(side, str):
-            logger.error(f"Invalid side type: {type(side)}")
-            return None
-
         if side.upper() not in ('BUY', 'SELL'):
-            logger.error(f"Invalid side: {side} (must be 'BUY' or 'SELL')")
+            logger.error(f"Invalid side: {side}")
             return None
-
         return await func(self, token_id, amount, side, *args, **kwargs)
     return wrapper
 
 
-class PolymarketConnector(DataConnector, HttpFetcherMixin, AsyncHttpFetcherMixin):
+class PolymarketConnector(HttpFetcherMixin, AsyncHttpFetcherMixin):
 
     def __init__(self):
-        """Initialize the Polymarket connector with proper error handling."""
         # Initialize API helper for low-level auth and client
         self.api = PolymarketAPI(NetworkConstants.CLOB_HOST, NetworkConstants.POLYGON_CHAIN_ID)
         

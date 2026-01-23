@@ -1,5 +1,3 @@
-"""Refactored core business logic controller with improved architecture."""
-
 import asyncio
 import logging
 import time
@@ -20,7 +18,6 @@ from src.activetrader.analytics import AnalyticsEngine, AnalyticsSnapshot, Timer
 
 logger = logging.getLogger("FingerBlaster")
 
-# Event types for callback registration
 CALLBACK_EVENTS: Tuple[str, ...] = (
     'market_update',      
     'btc_price_update',   
@@ -45,7 +42,6 @@ CALLBACK_EVENTS: Tuple[str, ...] = (
 )
 
 class CallbackManager:
-    """Manages event callbacks with proper cleanup."""
     def __init__(self):
         self._callbacks: Dict[str, List[Callable]] = {
             event: [] for event in CALLBACK_EVENTS
@@ -64,11 +60,9 @@ class CallbackManager:
     def unregister(self, event: str, callback: Callable) -> bool:
         if event not in self._callbacks: return False
         with self._lock:
-            try:
-                if callback in self._callbacks[event]:
-                    self._callbacks[event].remove(callback)
-                return True
-            except: return False
+            if callback in self._callbacks[event]:
+                self._callbacks[event].remove(callback)
+            return True
 
     def clear(self, event: Optional[str] = None) -> None:
         with self._lock:
@@ -95,8 +89,7 @@ class CallbackManager:
                 logger.error(f"Error in callback for {event}: {e}")
 
 class FingerBlasterCore:
-    """Shared business logic controller with improved architecture."""
-    
+
     def __init__(self, connector: Optional[PolymarketConnector] = None):
         self.config = AppConfig()
         self.connector = connector or PolymarketConnector()
@@ -141,11 +134,9 @@ class FingerBlasterCore:
         self._position_lock = asyncio.Lock()  # Lock for thread-safe position updates
 
     async def _on_ws_message(self, item: Dict[str, Any]) -> None:
-        """Called by WebSocketManager when new book data arrives."""
         await self._recalc_price()
 
     async def _recalc_price(self) -> None:
-        """Recalculate mid price and update UI."""
         now = time.time()
 
         # Check for stale data
@@ -162,7 +153,6 @@ class FingerBlasterCore:
         self._emit('price_update', *prices)
 
     async def _check_data_health(self) -> None:
-        """Monitors WebSocket health and reconnection."""
         is_stale = await self.market_manager.is_data_stale()
         if is_stale and not self._stale_data_warning_shown:
             self.log_msg("⚠️ WARNING: Price data stale. WebSocket may be down.")
@@ -198,17 +188,14 @@ class FingerBlasterCore:
         self._emit('btc_price_update', btc_price)
 
     def size_up(self) -> None:
-        """Increase the selected order size."""
         self.selected_size += 1.0
         self._emit('size_changed', self.selected_size)
 
     def size_down(self) -> None:
-        """Decrease the selected order size, minimum $1."""
         self.selected_size = max(1.0, self.selected_size - 1.0)
         self._emit('size_changed', self.selected_size)
 
     async def place_order(self, side: str) -> None:
-        """Place a market order for the specified side."""
         self.log_msg(f"Action: PLACE ORDER {side} (${self.selected_size})")
         
         # Initial submission event
@@ -256,11 +243,9 @@ class FingerBlasterCore:
             self._emit('order_failed', side, self.selected_size, error_msg)
 
     async def flatten(self) -> None:
-        """Alias for flatten_all to match UI calls."""
         await self.flatten_all()
 
     async def flatten_all(self) -> None:
-        """Flatten all positions by selling all tokens at market price."""
         self.log_msg("Action: FLATTEN ALL")
         self._emit('flatten_started')
         await asyncio.sleep(0)  # Yield control to let UI update
@@ -289,11 +274,9 @@ class FingerBlasterCore:
             self._emit('flatten_failed', error_msg)
 
     async def cancel_all(self) -> bool:
-        """Alias for cancel_all_orders to match UI calls."""
         return await self.cancel_all_orders()
 
     async def cancel_all_orders(self) -> bool:
-        """Cancel all pending orders."""
         self.log_msg("Action: CANCEL ALL ORDERS")
         self._emit('cancel_started')
         await asyncio.sleep(0)  # Yield control to let UI update

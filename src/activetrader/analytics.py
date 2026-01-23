@@ -1,15 +1,3 @@
-"""Advanced analytics engine for high-frequency binary options trading.
-
-This module provides quantitative analysis for 15-minute BTC Up/Down markets:
-- Basis Points (bps) calculation
-- Binary Fair Value using simplified Black-Scholes
-- Edge Detection (market vs fair value)
-- Z-Score / Sigma with rolling volatility
-- Liquidity depth analysis
-- Real-time PnL tracking
-- Slippage estimation
-"""
-
 import asyncio
 import logging
 import math
@@ -25,22 +13,19 @@ logger = logging.getLogger("FingerBlaster.Analytics")
 
 
 class TimerUrgency(Enum):
-    """Timer urgency levels for UI coloring."""
-    NORMAL = "normal"      # > 5 minutes, green
-    WATCHFUL = "watchful"  # 2-5 minutes, orange
-    CRITICAL = "critical"  # < 2 minutes, blinking red
+    NORMAL = "normal"
+    WATCHFUL = "watchful"
+    CRITICAL = "critical"
 
 
 class EdgeDirection(Enum):
-    """Edge direction for fair value comparison."""
-    UNDERVALUED = "undervalued"  # Market < FV, good to buy
-    OVERVALUED = "overvalued"    # Market > FV, good to sell
-    FAIR = "fair"                # Market ≈ FV
+    UNDERVALUED = "undervalued"
+    OVERVALUED = "overvalued"
+    FAIR = "fair"
 
 
 @dataclass
 class AnalyticsSnapshot:
-    """Immutable snapshot of all analytics data for UI rendering."""
     # Basis points
     basis_points: Optional[float] = None
     
@@ -89,25 +74,13 @@ class AnalyticsSnapshot:
 
 @dataclass
 class VolatilityWindow:
-    """Rolling window for volatility calculation."""
-    prices: deque = field(default_factory=lambda: deque(maxlen=900))  # 15 min of 1-sec data
+    prices: deque = field(default_factory=lambda: deque(maxlen=900))
     timestamps: deque = field(default_factory=lambda: deque(maxlen=900))
-    
+
 
 class AnalyticsEngine:
-    """High-performance analytics engine for binary options trading.
 
-    Provides real-time calculations for:
-    - Basis points distance from strike
-    - Fair value using binary option pricing
-    - Edge detection
-    - Rolling volatility and z-score
-    - Liquidity analysis
-    - PnL tracking
-    - Slippage estimation
-    """
-
-    # Constants for calculations
+    # Constants
     RISK_FREE_RATE = 0.0  # 0% as specified
     BPS_MULTIPLIER = 10000
     SECONDS_IN_YEAR = 365.25 * 24 * 60 * 60
@@ -117,7 +90,6 @@ class AnalyticsEngine:
     MAX_PROBABILITY = 0.99  # Maximum fair value (99%)
     
     def __init__(self):
-        """Initialize the analytics engine."""
         self._vol_window = VolatilityWindow()
         self._last_update = 0.0
         self._update_throttle = 0.1  # 100ms minimum between updates
@@ -133,38 +105,18 @@ class AnalyticsEngine:
         self._cex_price: Optional[float] = None
         self._cex_timestamp: Optional[float] = None
         
-        # Lock for thread safety
         self._lock = asyncio.Lock()
-    
-    # =========================================================================
-    # BASIS POINTS CALCULATION
-    # =========================================================================
-    
+
     def calculate_basis_points(
-        self, 
-        current_price: float, 
+        self,
+        current_price: float,
         price_to_beat: float
     ) -> Optional[float]:
-        """Calculate basis points distance from price to beat.
-        
-        Formula: ((Current BTC Price - Price to Beat) / Price to Beat) * 10,000
-        
-        Args:
-            current_price: Current BTC price
-            price_to_beat: Price to beat
-            
-        Returns:
-            Basis points as float, positive = above price to beat
-        """
         if price_to_beat <= 0 or current_price <= 0:
             return None
         
         return ((current_price - price_to_beat) / price_to_beat) * self.BPS_MULTIPLIER
-    
-    # =========================================================================
-    # BINARY FAIR VALUE (SIMPLIFIED BLACK-SCHOLES)
-    # =========================================================================
-    
+
     def calculate_binary_fair_value(
         self,
         current_price: float,
@@ -172,23 +124,6 @@ class AnalyticsEngine:
         time_to_expiry_seconds: float,
         volatility: Optional[float] = None
     ) -> Tuple[Optional[float], Optional[float]]:
-        """Calculate fair value of binary Up/Down contract using Black-Scholes.
-        
-        For a cash-or-nothing binary call (Up pays $1 if S > K):
-        FV_YES = N(d2) where d2 = (ln(S/K) + (r - σ²/2)T) / (σ√T)
-        
-        For binary put (Down pays $1 if S < K):
-        FV_NO = N(-d2) = 1 - N(d2)
-        
-        Args:
-            current_price: Current BTC price
-            price_to_beat: Price to beat
-            time_to_expiry_seconds: Time to expiry in seconds
-            volatility: Optional volatility override (annualized)
-            
-        Returns:
-            Tuple of (fair_value_yes, fair_value_no) as probabilities [0,1]
-        """
         if price_to_beat <= 0 or current_price <= 0 or time_to_expiry_seconds <= 0:
             return None, None
         
