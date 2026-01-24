@@ -530,14 +530,14 @@ class WebSocketManager:
 
     async def subscribe_to_market(self, market: Dict[str, Any]) -> None:
         """Subscribe to a specific market.
-        
-        This ensures the WebSocket is started and will connect to the 
+
+        This ensures the WebSocket is started and will connect to the
         current market in the manager.
-        
+
         Args:
             market: Market data dictionary (unused here, as we poll manager)
         """
-        logger.info(f"Subscribing WebSocket to market: {market.get('market_id')}")
+        logger.debug(f"Subscribing WebSocket to market: {market.get('market_id')}")
         await self.start()
     
     async def _connect_loop(self) -> None:

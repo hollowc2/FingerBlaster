@@ -137,6 +137,12 @@ class FingerBlasterCore:
         self._last_health_check: float = 0.0
         self._stale_data_warning_shown: bool = False
         self._position_lock = asyncio.Lock()
+        self._market_update_lock = asyncio.Lock()  # Prevent concurrent market updates
+        self._market_update_in_progress: bool = False  # Track update state
+
+        # Market transition deduplication - prevents flood of WebSocket subscriptions
+        self._switching_to_market_id: Optional[str] = None  # Market ID we're currently switching to
+        self._market_switch_lock = asyncio.Lock()  # Serialize market transitions
 
     async def _on_ws_message(self, item: Dict[str, Any]) -> None:
         await self._recalc_price()
@@ -402,80 +408,130 @@ class FingerBlasterCore:
 
     async def update_market_status(self) -> None:
         """Poll for active market and handle discovery."""
-        try:
-            market = await self.connector.get_active_market()
-            if market:
-                # Check if it's a new market
-                current = await self.market_manager.get_market()
-                if not current or current.get('market_id') != market.get('market_id'):
-                    # Prevent switching back to an expired market
-                    # Only switch if the new market ends AFTER the current market
-                    should_switch = False
+        # Prevent concurrent market updates (race condition during market transitions)
+        # Pre-check to avoid queueing on the lock
+        if self._market_update_in_progress:
+            logger.debug("Market update already in progress, skipping")
+            return
 
-                    if not current:
-                        # No current market - always switch
-                        should_switch = True
-                    else:
-                        # Compare end times - only switch to markets that end later
-                        try:
-                            current_end = pd.Timestamp(current.get('end_date'))
-                            if current_end.tz is None:
-                                current_end = current_end.tz_localize('UTC')
+        async with self._market_update_lock:
+            # Double-check inside lock (in case flag changed while waiting)
+            if self._market_update_in_progress:
+                logger.debug("Market update already in progress (double-check), skipping")
+                return
 
-                            new_end = pd.Timestamp(market.get('end_date'))
-                            if new_end.tz is None:
-                                new_end = new_end.tz_localize('UTC')
+            self._market_update_in_progress = True
+            try:
+                # Fetch market data INSIDE the lock to avoid stale data
+                market = await self.connector.get_active_market()
+                if market:
+                    # Check if it's a new market
+                    current = await self.market_manager.get_market()
+                    if not current or current.get('market_id') != market.get('market_id'):
+                        # Prevent switching back to an expired market
+                        # Only switch if the new market ends AFTER the current market
+                        should_switch = False
 
-                            # Only switch if new market ends after current market
-                            # This prevents flip-flopping back to expired markets
-                            if new_end > current_end:
-                                should_switch = True
-                                logger.info(
-                                    f"Switching to newer market: {market.get('market_id')} "
-                                    f"(ends {new_end} vs current {current_end})"
-                                )
-                            else:
-                                logger.debug(
-                                    f"Ignoring older/same market: {market.get('market_id')} "
-                                    f"(ends {new_end} vs current {current_end})"
-                                )
-                        except Exception as e:
-                            logger.warning(f"Error comparing market times: {e}")
-                            # If we can't compare times, don't switch
-                            should_switch = False
+                        if not current:
+                            # No current market - always switch
+                            should_switch = True
+                        else:
+                            # Compare end times - only switch to markets that end later
+                            try:
+                                current_end = pd.Timestamp(current.get('end_date'))
+                                if current_end.tz is None:
+                                    current_end = current_end.tz_localize('UTC')
 
-                    if should_switch:
-                        await self._on_new_market_found(market)
+                                new_end = pd.Timestamp(market.get('end_date'))
+                                if new_end.tz is None:
+                                    new_end = new_end.tz_localize('UTC')
 
-            # Always try to resolve strike if pending/dynamic
-            await self._try_resolve_pending_strike()
-        except Exception as e:
-            logger.error(f"Error updating market status: {e}")
+                                # Only switch if new market ends after current market
+                                # This prevents flip-flopping back to expired markets
+                                if new_end > current_end:
+                                    should_switch = True
+                                    logger.info(
+                                        f"Switching to newer market: {market.get('market_id')} "
+                                        f"(ends {new_end} vs current {current_end})"
+                                    )
+                                else:
+                                    logger.debug(
+                                        f"Ignoring older/same market: {market.get('market_id')} "
+                                        f"(ends {new_end} vs current {current_end})"
+                                    )
+                            except Exception as e:
+                                logger.warning(f"Error comparing market times: {e}")
+                                # If we can't compare times, don't switch
+                                should_switch = False
+
+                        if should_switch:
+                            await self._on_new_market_found(market)
+
+                # Always try to resolve strike if pending/dynamic
+                await self._try_resolve_pending_strike()
+            except Exception as e:
+                logger.error(f"Error updating market status: {e}")
+            finally:
+                self._market_update_in_progress = False
 
     async def _on_new_market_found(self, market: Dict[str, Any]) -> None:
-        """Handle transition to new market."""
-        self.log_msg(f"New Market Found: {market.get('title', 'Unknown')}")
-        self.resolution_shown = False
-        
-        # Set market in manager
-        await self.market_manager.set_market(market)
-        
-        # Subscribe WebSocket
-        await self.ws_manager.subscribe_to_market(market)
-        
-        # Reset positions on new market
-        self._yes_position = 0.0
-        self._no_position = 0.0
-        self._last_position_update = 0.0 # Force update for new market
-        
-        # Emit update
-        ends = self._format_ends(market.get('end_date', ''))
-        market_name = market.get('title', 'Market')
-        self.callback_manager.emit('market_update', market.get('price_to_beat', 'N/A'), ends, market_name)
+        """Handle transition to new market with deduplication.
 
-        # Immediately try to resolve strike if dynamic
-        if market.get('price_to_beat') in ('Dynamic', 'Pending', 'N/A', '', None):
-            asyncio.create_task(self._try_resolve_pending_strike())
+        Uses a lock and tracking flag to prevent multiple concurrent transitions
+        to the same market, which would cause a flood of WebSocket subscriptions.
+        """
+        market_id = market.get('market_id')
+
+        # Fast path: check if we're already switching to this market (no lock needed)
+        if self._switching_to_market_id == market_id:
+            logger.debug(f"Already switching to market {market_id}, skipping duplicate")
+            return
+
+        # Serialize market transitions to prevent race conditions
+        async with self._market_switch_lock:
+            # Double-check inside lock (another task may have completed the switch)
+            if self._switching_to_market_id == market_id:
+                logger.debug(f"Already switching to market {market_id} (inside lock), skipping")
+                return
+
+            # Check if we've already switched to this market
+            current = await self.market_manager.get_market()
+            if current and current.get('market_id') == market_id:
+                logger.debug(f"Already on market {market_id}, skipping switch")
+                return
+
+            # Mark that we're switching to this market
+            self._switching_to_market_id = market_id
+            logger.info(f"Switching to market {market_id}")
+
+            try:
+                self.log_msg(f"New Market Found: {market.get('title', 'Unknown')}")
+                self.resolution_shown = False
+
+                # Set market in manager
+                await self.market_manager.set_market(market)
+
+                # Subscribe WebSocket
+                await self.ws_manager.subscribe_to_market(market)
+
+                # Reset positions on new market
+                self._yes_position = 0.0
+                self._no_position = 0.0
+                self._last_position_update = 0.0  # Force update for new market
+
+                # Emit update
+                ends = self._format_ends(market.get('end_date', ''))
+                market_name = market.get('title', 'Market')
+                self.callback_manager.emit('market_update', market.get('price_to_beat', 'N/A'), ends, market_name)
+
+                # Immediately try to resolve strike if dynamic
+                if market.get('price_to_beat') in ('Dynamic', 'Pending', 'N/A', '', None):
+                    asyncio.create_task(self._try_resolve_pending_strike())
+
+            finally:
+                # Clear the switching flag after transition completes (success or failure)
+                # This allows retrying if something went wrong
+                self._switching_to_market_id = None
 
     def _format_ends(self, end_str: str) -> str:
         try:
@@ -510,14 +566,29 @@ class FingerBlasterCore:
         """Automatically migrate to next market after current expires.
 
         Waits for overlay, then searches with retries and exponential backoff.
+        Skips migration if polling has already found a newer market.
         """
+        expired_market_id = expired_market.get('market_id')
+
         # Wait for resolution overlay to finish
         await asyncio.sleep(self.config.resolution_overlay_duration)
+
+        # Check if we've already migrated to a new market (e.g., via polling)
+        current = await self.market_manager.get_market()
+        if current and current.get('market_id') != expired_market_id:
+            logger.info(f"Migration skipped: already on market {current.get('market_id')}")
+            return
 
         max_attempts = 5
         retry_delay = 2.0
 
         for attempt in range(1, max_attempts + 1):
+            # Re-check before each attempt in case polling found the market
+            current = await self.market_manager.get_market()
+            if current and current.get('market_id') != expired_market_id:
+                logger.info(f"Migration cancelled: polling already found market {current.get('market_id')}")
+                return
+
             try:
                 self.log_msg(f"Migration attempt {attempt}/{max_attempts}...")
 
