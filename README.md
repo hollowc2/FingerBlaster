@@ -284,10 +284,26 @@ The analytics engine generates a complete snapshot every 500ms with the followin
 - **Edge < 50bps**: Fair pricing, be selective
 
 **2. Z-Score (Sigma) - Position Confidence**
-- **\|σ\| > 2.0**: Strong directional move, high confidence
+
+The σ metric shows how many standard deviations BTC is from the strike price, adjusted for time and volatility:
+
+```
+Z = ln(S/K) / (σ√T)
+```
+
+Where:
+- **S** = Current BTC price
+- **K** = Strike price (price to beat)
+- **σ** = Annualized volatility (60% default, or realized vol)
+- **T** = Time to expiry (in years)
+
+**Interpretation:**
+- **\|σ\| > 2.0**: Strong directional move, high confidence (rare events)
 - **\|σ\| < 0.5**: Price near strike, coin-flip territory
 - **Positive σ**: BTC above strike (YES favored)
 - **Negative σ**: BTC below strike (NO favored)
+
+**Example:** If BTC is trading at +1.5σ with 10 minutes remaining, it means BTC is 1.5 standard deviations above the strike—a statistically significant move that accounts for both the price distance and remaining time for mean reversion.
 
 **3. Timer Urgency - Risk Management**
 - **Green (>5 min)**: Normal trading, time for positions to work
