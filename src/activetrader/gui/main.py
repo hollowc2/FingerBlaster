@@ -385,7 +385,7 @@ class TradingTUI(App):
                 with Horizontal(id="metrics-row"):
                     self._size_control = SizeControl(id="size-control")
                     yield self._size_control
-                    yield MetricBox("DELTA Δ", "$0.00", id="metric-delta")
+                    yield MetricBox("DIST Δ", "$0 (0bp)", id="metric-delta")
                     yield MetricBox("SIGMA Σ", "0.00", id="metric-sigma")
 
             with Vertical(id="time-progress-container"):
@@ -528,8 +528,8 @@ class TradingTUI(App):
                 try:
                     strike = float(str(self.price_to_beat).replace('$', '').replace(',', ''))
                     self.delta_val = self.btc_price - strike
-                    sign = "+" if self.delta_val >= 0 else ""
-                    self.query_one("#metric-delta", MetricBox).query_one(".metric-value", Static).update(f"{sign}${self.delta_val:,.2f}")
+                    delta_display = self._format_delta_display(self.delta_val, strike)
+                    self.query_one("#metric-delta", MetricBox).query_one(".metric-value", Static).update(delta_display)
                     self._update_delta_border(self.delta_val)
                 except (ValueError, TypeError): pass
 
@@ -571,9 +571,9 @@ class TradingTUI(App):
             try:
                 strike = float(str(self.price_to_beat).replace('$', '').replace(',', ''))
                 self.delta_val = price - strike
-                sign = "+" if self.delta_val >= 0 else ""
+                delta_display = self._format_delta_display(self.delta_val, strike)
                 delta_widget = self.query_one("#metric-delta", MetricBox)
-                delta_widget.query_one(".metric-value", Static).update(f"{sign}${self.delta_val:,.2f}")
+                delta_widget.query_one(".metric-value", Static).update(delta_display)
                 self._update_delta_border(self.delta_val)
             except Exception as e:
                 logger.debug(f"Error updating delta in watch_btc_price: {e}")
@@ -609,9 +609,9 @@ class TradingTUI(App):
             try:
                 strike_float = float(str(strike).replace('$', '').replace(',', ''))
                 self.delta_val = self.btc_price - strike_float
-                sign = "+" if self.delta_val >= 0 else ""
+                delta_display = self._format_delta_display(self.delta_val, strike_float)
                 delta_widget = self.query_one("#metric-delta", MetricBox)
-                delta_widget.query_one(".metric-value", Static).update(f"{sign}${self.delta_val:,.2f}")
+                delta_widget.query_one(".metric-value", Static).update(delta_display)
                 self._update_delta_border(self.delta_val)
             except (ValueError, TypeError):
                 # Expected if strike parsing fails
@@ -673,19 +673,48 @@ class TradingTUI(App):
         except Exception as e:
             logger.debug(f"Error in _on_countdown_update: {e}")
 
+    def _format_delta_display(self, delta_usd: float, strike_price: float) -> str:
+        """Format delta display with both dollar value and basis points.
+
+        Args:
+            delta_usd: Delta in dollars (BTC price - strike)
+            strike_price: Strike price for basis point calculation
+
+        Returns:
+            Formatted string for display
+
+        Note:
+            To switch to bp-only display, change return to:
+            return f"{sign}{delta_bps:.0f}bp"
+        """
+        if strike_price <= 0:
+            return f"${delta_usd:,.0f}"
+
+        # Calculate basis points
+        delta_bps = (delta_usd / strike_price) * 10000
+
+        # Format with sign
+        sign = "+" if delta_usd >= 0 else ""
+
+        # Hybrid display: $ and bp
+        return f"{sign}${delta_usd:,.0f} ({sign}{delta_bps:.0f}bp)"
+
+        # For future bp-only display, uncomment this line and comment out the line above:
+        # return f"{sign}{delta_bps:.0f}bp"
+
     def _update_delta_border(self, delta_value: float) -> None:
         """Update border color and thickness for delta based on value (positive=green, negative=red, thicker as |value| increases)."""
         try:
             delta_widget = self.query_one("#metric-delta", MetricBox)
             # Remove all border classes
             delta_widget.remove_class("border-red", "border-green", "border-thin", "border-medium", "border-thick", "border-very-thick")
-            
+
             # Set color based on sign
             if delta_value > 0:
                 delta_widget.add_class("border-green")
             elif delta_value < 0:
                 delta_widget.add_class("border-red")
-            
+
             # Set thickness based on absolute value
             abs_delta = abs(delta_value)
             if abs_delta >= 1000:

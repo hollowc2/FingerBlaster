@@ -258,7 +258,7 @@ The analytics engine generates a complete snapshot every 500ms with the followin
 **Market Context:**
 - **STRIKE** - Current strike price for the binary market
 - **BTC** - Real-time BTC price (from Chainlink via RTDS)
-- **DELTA** - Distance from strike in $ and basis points
+- **DIST** - Distance from strike in $ and basis points (e.g., "+$500 (+50bp)")
 - **SIGMA (σ)** - Z-score: How many standard deviations from strike
 - **REMAIN** - Countdown timer with urgency coloring
 
