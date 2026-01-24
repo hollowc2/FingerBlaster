@@ -614,7 +614,7 @@ class WebSocketManager:
                                 continue
                             
                             data = json.loads(message)
-                            
+
                             # Check for error messages from server
                             if isinstance(data, dict):
                                 error_msg = data.get('error') or data.get('message', '')
@@ -625,15 +625,16 @@ class WebSocketManager:
                                         f"Check your PRIVATE_KEY and Polymarket API credentials in .env"
                                     )
                                     # Don't break - let reconnection handle it
-                            
+
                             if isinstance(data, list):
                                 for item in data:
                                     await self._process_message(item)
                             else:
                                 await self._process_message(data)
-                                
+
                         except asyncio.TimeoutError:
-                            # Send ping to keep connection alive
+                            # CRITICAL FIX: Must await to avoid busy-wait loop
+                            await asyncio.sleep(0.1)  # Prevent CPU spinning
                             continue
                         except ConnectionClosed as e:
                             logger.warning(f"WebSocket connection closed: {e}")
@@ -911,6 +912,9 @@ class RTDSManager:
         self._history_lock = asyncio.Lock()
         # Message counter for rate-limited logging
         self._message_count = 0
+        # Price health tracking
+        self._last_price_update_time: float = 0.0
+        self._stale_warning_shown: bool = False
     
     async def start(self) -> None:
         """Start RTDS WebSocket connection."""
@@ -1034,7 +1038,9 @@ class RTDSManager:
                             await self._process_message(data)
                             
                         except asyncio.TimeoutError:
-                            # Send ping to keep connection alive
+                            # CRITICAL FIX: Must await to avoid busy-wait loop
+                            await self._check_price_health()
+                            await asyncio.sleep(0.1)  # Prevent CPU spinning
                             continue
                         except ConnectionClosed as e:
                             logger.warning(f"RTDS connection closed: {e}")
@@ -1138,6 +1144,13 @@ class RTDSManager:
             
             # Update price and trigger callback (prefer Chainlink)
             if btc_price and btc_price > 0:
+                # Track last update time for health checks
+                self._last_price_update_time = time.time()
+                # Reset stale warning flag when we get an update
+                if self._stale_warning_shown:
+                    logger.info("✓ BTC price updates resumed")
+                    self._stale_warning_shown = False
+
                 # Call callback with Chainlink price if available, otherwise Binance
                 if self.on_btc_price:
                     result = self.on_btc_price(btc_price)
@@ -1146,7 +1159,38 @@ class RTDSManager:
                     
         except (KeyError, ValueError, TypeError) as e:
             logger.warning(f"Error processing RTDS message: {e}", exc_info=True)
-    
+
+    async def _check_price_health(self) -> None:
+        """Check if BTC price is stale and log warnings."""
+        if self.current_btc_price is None and self.current_chainlink_price is None:
+            return  # Never received price - still connecting
+
+        now = time.time()
+        if self._last_price_update_time == 0.0:
+            self._last_price_update_time = now
+            return
+
+        time_since_update = now - self._last_price_update_time
+
+        # Warn if no price update for 60 seconds
+        if time_since_update > self.config.rtds_price_stale_threshold_seconds and not self._stale_warning_shown:
+            logger.warning(
+                f"⚠️ BTC price stale: No update for {time_since_update:.1f}s. "
+                f"Chainlink: {self.current_chainlink_price}, Binance: {self.current_btc_price}"
+            )
+            self._stale_warning_shown = True
+
+    def get_connection_status(self) -> Dict[str, Any]:
+        """Get diagnostic information about RTDS connection."""
+        return {
+            'connected': self._ws is not None,
+            'has_chainlink_price': self.current_chainlink_price is not None,
+            'has_binance_price': self.current_btc_price is not None,
+            'history_entries': len(self.chainlink_price_history),
+            'current_chainlink': self.current_chainlink_price,
+            'current_binance': self.current_btc_price,
+        }
+
     def get_current_price(self) -> Optional[float]:
         """Get the current BTC price from RTDS.
 

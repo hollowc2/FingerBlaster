@@ -46,9 +46,9 @@ class AppConfig:
     ws_max_reconnect_attempts: int = 10
     ws_ping_interval: int = 20  # Send ping every 20 seconds
     ws_ping_timeout: int = 10  # Wait 10 seconds for pong
-    ws_recv_timeout: float = 1.0  # Timeout for receiving messages
+    ws_recv_timeout: float = 30.0  # CLOB can have gaps in quiet markets
     ws_max_message_size: int = 10 * 1024 * 1024  # 10MB max message size
-    
+
     # =========================================================================
     # RTDS (Real Time Data Stream) settings for crypto prices
     # =========================================================================
@@ -57,8 +57,9 @@ class AppConfig:
     rtds_max_reconnect_attempts: int = 10
     rtds_ping_interval: int = 20
     rtds_ping_timeout: int = 10
-    rtds_recv_timeout: float = 1.0
+    rtds_recv_timeout: float = 30.0  # Chainlink updates irregularly (20-60s)
     rtds_history_retention_ms: int = 3600000  # Keep 1 hour of price history
+    rtds_price_stale_threshold_seconds: float = 60.0  # Warn if no update
     
     # =========================================================================
     # UI settings

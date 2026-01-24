@@ -408,8 +408,45 @@ class FingerBlasterCore:
                 # Check if it's a new market
                 current = await self.market_manager.get_market()
                 if not current or current.get('market_id') != market.get('market_id'):
-                    await self._on_new_market_found(market)
-            
+                    # Prevent switching back to an expired market
+                    # Only switch if the new market ends AFTER the current market
+                    should_switch = False
+
+                    if not current:
+                        # No current market - always switch
+                        should_switch = True
+                    else:
+                        # Compare end times - only switch to markets that end later
+                        try:
+                            current_end = pd.Timestamp(current.get('end_date'))
+                            if current_end.tz is None:
+                                current_end = current_end.tz_localize('UTC')
+
+                            new_end = pd.Timestamp(market.get('end_date'))
+                            if new_end.tz is None:
+                                new_end = new_end.tz_localize('UTC')
+
+                            # Only switch if new market ends after current market
+                            # This prevents flip-flopping back to expired markets
+                            if new_end > current_end:
+                                should_switch = True
+                                logger.info(
+                                    f"Switching to newer market: {market.get('market_id')} "
+                                    f"(ends {new_end} vs current {current_end})"
+                                )
+                            else:
+                                logger.debug(
+                                    f"Ignoring older/same market: {market.get('market_id')} "
+                                    f"(ends {new_end} vs current {current_end})"
+                                )
+                        except Exception as e:
+                            logger.warning(f"Error comparing market times: {e}")
+                            # If we can't compare times, don't switch
+                            should_switch = False
+
+                    if should_switch:
+                        await self._on_new_market_found(market)
+
             # Always try to resolve strike if pending/dynamic
             await self._try_resolve_pending_strike()
         except Exception as e:
@@ -433,9 +470,8 @@ class FingerBlasterCore:
         
         # Emit update
         ends = self._format_ends(market.get('end_date', ''))
-        starts = self._format_starts(market.get('start_date', ''))
         market_name = market.get('title', 'Market')
-        self.callback_manager.emit('market_update', market.get('price_to_beat', 'N/A'), ends, market_name, starts)
+        self.callback_manager.emit('market_update', market.get('price_to_beat', 'N/A'), ends, market_name)
 
         # Immediately try to resolve strike if dynamic
         if market.get('price_to_beat') in ('Dynamic', 'Pending', 'N/A', '', None):
@@ -462,11 +498,59 @@ class FingerBlasterCore:
             return str(start_str)
 
     async def _handle_market_resolution(self, market: Dict[str, Any]) -> None:
-        """Handle market expiry and emit resolution event."""
+        """Handle market expiry, emit event, and migrate to next market."""
         self.resolution_shown = True
-        self.log_msg("⚠️ MARKET EXPIRED - Waiting for resolution...")
+        self.log_msg("⚠️ MARKET EXPIRED - Searching for next market...")
         self.callback_manager.emit('resolution', "EXPIRED")
-        
+
+        # Schedule market migration after overlay
+        asyncio.create_task(self._migrate_to_next_market(market))
+
+    async def _migrate_to_next_market(self, expired_market: Dict[str, Any]) -> None:
+        """Automatically migrate to next market after current expires.
+
+        Waits for overlay, then searches with retries and exponential backoff.
+        """
+        # Wait for resolution overlay to finish
+        await asyncio.sleep(self.config.resolution_overlay_duration)
+
+        max_attempts = 5
+        retry_delay = 2.0
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                self.log_msg(f"Migration attempt {attempt}/{max_attempts}...")
+
+                # Get next market using connector
+                next_market = await self.connector.get_next_market(
+                    current_end_date_str=expired_market.get('end_date'),
+                    series_id="10192"  # BTC Up or Down 15m series
+                )
+
+                if next_market:
+                    # Found next market - transition
+                    await self._on_new_market_found(next_market)
+                    self.log_msg(f"✓ Migrated to: {next_market.get('title', 'Unknown')}")
+                    return
+                else:
+                    self.log_msg(f"No next market found (attempt {attempt}/{max_attempts})")
+
+                    if attempt < max_attempts:
+                        wait_time = retry_delay * (2 ** (attempt - 1))
+                        self.log_msg(f"Retrying in {wait_time:.1f}s...")
+                        await asyncio.sleep(wait_time)
+
+            except Exception as e:
+                logger.error(f"Migration error (attempt {attempt}): {e}", exc_info=True)
+                self.log_msg(f"Migration error: {str(e)}")
+
+                if attempt < max_attempts:
+                    wait_time = retry_delay * (2 ** (attempt - 1))
+                    await asyncio.sleep(wait_time)
+
+        # All attempts failed - normal polling will continue
+        self.log_msg("⚠️ Could not find next market. Continuing to poll...")
+
     async def _try_resolve_pending_strike(self) -> None:
         """
         Resolve dynamic strike prices using a 6-tier fallback chain.
@@ -506,72 +590,92 @@ class FingerBlasterCore:
         try:
             logger.info(f"Attempting to resolve dynamic strike for {start_dt} (market_started={market_started})...")
 
+            # Check RTDS connection status before attempting resolution
+            rtds_status = self.rtds_manager.get_connection_status()
+            logger.info(
+                f"  RTDS status: connected={rtds_status['connected']}, "
+                f"history_entries={rtds_status['history_entries']}, "
+                f"chainlink_price={rtds_status['current_chainlink']}"
+            )
+
             strike_val = None
             source = "Unknown"
 
             # METHOD 1: RTDS Chainlink history (local cache, fastest)
+            logger.info("  Attempting METHOD 1: RTDS/Chainlink cache...")
             if strike_val is None:
                 strike_val = self.rtds_manager.get_chainlink_price_at(start_dt)
                 if strike_val:
                     source = "RTDS/Chainlink Cache"
-                    logger.info(f"✓ Strike resolved from RTDS/Chainlink cache: ${strike_val:,.2f}")
+                    logger.info(f"  ✓ METHOD 1 SUCCESS: Strike resolved from RTDS/Chainlink cache: ${strike_val:,.2f}")
+                else:
+                    logger.warning(f"  ✗ METHOD 1 FAILED: No price in RTDS cache for {start_dt}")
 
             # METHOD 2: Chainlink on-chain oracle (GUARANTEED - same source Polymarket uses)
             if strike_val is None:
-                logger.debug("RTDS cache miss, querying Chainlink on-chain oracle...")
+                logger.info("  Attempting METHOD 2: Chainlink on-chain oracle...")
                 strike_val = await self.connector.get_chainlink_onchain_price_at(start_dt)
                 if strike_val:
                     source = "Chainlink On-Chain Oracle"
-                    logger.info(f"✓ Strike resolved from Chainlink on-chain: ${strike_val:,.2f}")
+                    logger.info(f"  ✓ METHOD 2 SUCCESS: Strike resolved from Chainlink on-chain: ${strike_val:,.2f}")
+                else:
+                    logger.warning("  ✗ METHOD 2 FAILED: Chainlink on-chain oracle unavailable")
 
             # METHOD 3: Chainlink API (experimental, but worth trying)
             if strike_val is None:
-                logger.debug("Chainlink on-chain unavailable, trying Chainlink API...")
+                logger.info("  Attempting METHOD 3: Chainlink API...")
                 strike_val = await self.connector.get_chainlink_price_at(start_dt)
                 if strike_val:
                     source = "Chainlink API"
-                    logger.info(f"✓ Strike resolved from Chainlink API: ${strike_val:,.2f}")
+                    logger.info(f"  ✓ METHOD 3 SUCCESS: Strike resolved from Chainlink API: ${strike_val:,.2f}")
+                else:
+                    logger.warning("  ✗ METHOD 3 FAILED: Chainlink API unavailable")
 
             # METHOD 4: Coinbase 15m candle (best CEX match for 15m markets)
             if strike_val is None:
-                logger.debug("Chainlink sources unavailable, trying Coinbase 15m candle...")
+                logger.info("  Attempting METHOD 4: Coinbase 15m candle...")
                 strike_val = await self.connector.get_coinbase_15m_open_price_at(start_dt)
                 if strike_val:
                     source = "Coinbase 15m"
-                    logger.info(f"✓ Strike resolved from Coinbase 15m: ${strike_val:,.2f}")
+                    logger.info(f"  ✓ METHOD 4 SUCCESS: Strike resolved from Coinbase 15m: ${strike_val:,.2f}")
+                else:
+                    logger.warning("  ✗ METHOD 4 FAILED: Coinbase 15m candle unavailable")
 
             # METHOD 5: Binance 1m candle (reliable CEX fallback)
             if strike_val is None:
-                logger.debug("Coinbase unavailable, trying Binance 1m candle...")
+                logger.info("  Attempting METHOD 5: Binance 1m candle...")
                 btc_price_str = await self.connector.get_btc_price_at(start_dt)
                 if btc_price_str and btc_price_str != "N/A":
                     try:
                         strike_val = float(btc_price_str)
                         source = "Binance 1m"
-                        logger.info(f"✓ Strike resolved from Binance 1m: ${strike_val:,.2f}")
+                        logger.info(f"  ✓ METHOD 5 SUCCESS: Strike resolved from Binance 1m: ${strike_val:,.2f}")
                     except (ValueError, TypeError):
-                        pass
+                        logger.warning("  ✗ METHOD 5 FAILED: Binance returned invalid price")
+                else:
+                    logger.warning("  ✗ METHOD 5 FAILED: Binance 1m candle unavailable")
 
             # METHOD 6: Emergency fallback - current price (only if market has started)
             if strike_val is None and market_started:
-                logger.warning("All historical sources failed, using current price as emergency fallback...")
+                logger.info("  Attempting METHOD 6: Current price (emergency fallback)...")
                 current_btc = self.rtds_manager.get_current_price()
                 if current_btc and current_btc > 0:
                     strike_val = current_btc
                     source = "Current Price (Emergency)"
-                    logger.warning(f"⚠️ Using current BTC price as emergency fallback: ${strike_val:,.2f}")
+                    logger.warning(f"  ⚠️ METHOD 6 USED: Using current BTC price as emergency fallback: ${strike_val:,.2f}")
+                else:
+                    logger.warning("  ✗ METHOD 6 FAILED: Current price unavailable")
 
             # ALWAYS have a price when market has started
             if strike_val:
-                logger.info(f"✓ Final resolved strike: ${strike_val:,.2f} from {source} at {start_dt}")
+                logger.info(f"✅ STRIKE RESOLVED: ${strike_val:,.2f} from {source}")
                 # Update market in manager
                 market['price_to_beat'] = f"{strike_val:,.2f}"
                 await self.market_manager.set_market(market)
                 # Emit update
                 ends = self._format_ends(market.get('end_date', ''))
-                starts = self._format_starts(market.get('start_date', ''))
                 market_name = market.get('title', 'Market')
-                self.callback_manager.emit('market_update', market['price_to_beat'], ends, market_name, starts)
+                self.callback_manager.emit('market_update', market['price_to_beat'], ends, market_name)
             else:
                 # Market hasn't started yet - keep as Pending (will retry)
                 if not market_started:
@@ -579,13 +683,17 @@ class FingerBlasterCore:
                     market['price_to_beat'] = "Pending"
                     await self.market_manager.set_market(market)
                     ends = self._format_ends(market.get('end_date', ''))
-                    starts = self._format_starts(market.get('start_date', ''))
                     market_name = market.get('title', 'Market')
-                    self.callback_manager.emit('market_update', market['price_to_beat'], ends, market_name, starts)
+                    self.callback_manager.emit('market_update', market['price_to_beat'], ends, market_name)
                 else:
-                    # This should NEVER happen with 4-tier fallback + emergency fallback
-                    logger.error("CRITICAL: All 4 price sources failed! This should be impossible.")
-                    self.log_msg(f"⚠️ Strike price resolution failed - all sources unavailable")
+                    # This should NEVER happen with 6-tier fallback chain
+                    logger.error(
+                        "❌ CRITICAL: ALL 6 PRICE SOURCES FAILED after market start! "
+                        f"Market started at {start_dt}, current time {now_utc}. "
+                        "Check RTDS connection, Chainlink oracle, and CEX APIs. "
+                        f"RTDS status: {rtds_status}"
+                    )
+                    self.log_msg(f"⚠️ Strike price resolution failed - all 6 sources unavailable")
 
         except Exception as e:
             logger.error(f"Error resolving strike: {e}", exc_info=True)
