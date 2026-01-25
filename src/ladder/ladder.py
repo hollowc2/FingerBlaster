@@ -40,8 +40,13 @@ class Side(Enum):
 class VolumeBarRenderer:
     """Renders horizontal volume bars using Unicode block characters."""
 
-    # Block characters for sub-character precision (0/8 to 8/8)
-    BLOCKS = " ▏▎▍▌▋▊▉█"
+    # Left-extending blocks for YES side (0/8 to 8/8, extend from left edge)
+    BLOCKS_LEFT = " ▏▎▍▌▋▊▉█"
+
+    # Right-extending blocks for NO side (extend from right edge)
+    # Unicode only provides ▕ (1/8) and ▐ (4/8), so we approximate:
+    # 0=space, 1-2=▕, 3-6=▐, 7-8=█
+    BLOCKS_RIGHT = " ▕▕▐▐▐▐██"
 
     def __init__(self, max_width: int = 10):
         self.max_width = max_width
@@ -73,18 +78,20 @@ class VolumeBarRenderer:
         full_blocks = total_eighths // 8
         remainder = total_eighths % 8
 
-        # Build bar string
-        bar = "█" * full_blocks
-        if remainder > 0 and full_blocks < self.max_width:
-            bar += self.BLOCKS[remainder]
-
-        # Pad to fixed width - MUST always return max_width chars to prevent update artifacts
+        # Build bar string with appropriate partial block characters
         if align_right:
-            # Right-aligned: reverse bar and pad with spaces on LEFT
-            # This ensures blocks are flush against the right edge of the column
-            return bar[::-1].rjust(self.max_width)
+            # NO side: partial block FIRST (left), then full blocks (right)
+            # This puts the partial's empty left side into the padding, full blocks flush against NO column
+            bar = ""
+            if remainder > 0 and full_blocks < self.max_width:
+                bar += self.BLOCKS_RIGHT[remainder]
+            bar += "█" * full_blocks
+            return bar.rjust(self.max_width)
         else:
-            # Left-aligned: pad with spaces on right
+            # YES side: full blocks first, then partial block at end
+            bar = "█" * full_blocks
+            if remainder > 0 and full_blocks < self.max_width:
+                bar += self.BLOCKS_LEFT[remainder]
             return bar.ljust(self.max_width)
 
 
@@ -379,7 +386,7 @@ class DOMRowWidget(Horizontal):
         color: #ff6666;
         padding: 0;
         margin: 0;
-        content-align: right middle;
+        content-align: left middle;
     }
 
     DOMRowWidget .no-price-col {
