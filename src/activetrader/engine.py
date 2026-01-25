@@ -56,9 +56,6 @@ class MarketDataManager:
             'Down': {'bids': {}, 'asks': {}}
         }
         self.market_start_time: Optional[pd.Timestamp] = None
-        # Cache for validation results
-        self._validation_cache: Optional[bool] = None
-        self._cached_market_id: Optional[str] = None
 
         # Stale data detection
         self._last_update_time: float = 0.0
@@ -74,20 +71,12 @@ class MarketDataManager:
         Returns:
             True if market was set successfully, False otherwise
         """
-        # Check cache first
+        # Always validate - cache only helps avoid repeated detailed validation
+        # but we still need to ensure required fields are present
         market_id = market.get('market_id')
-        if (market_id == self._cached_market_id and 
-            self._validation_cache is not None):
-            if not self._validation_cache:
-                return False
-        else:
-            # Validate and cache result
-            if not self._validate_market(market):
-                self._validation_cache = False
-                self._cached_market_id = market_id
-                return False
-            self._validation_cache = True
-            self._cached_market_id = market_id
+        if not self._validate_market(market):
+            logger.warning(f"Market {market_id} failed validation")
+            return False
         
         async with self.lock:
             self.current_market = market
@@ -139,9 +128,6 @@ class MarketDataManager:
                 'Up': {'bids': {}, 'asks': {}},
                 'Down': {'bids': {}, 'asks': {}}
             }
-            # Clear validation cache
-            self._validation_cache = None
-            self._cached_market_id = None
     
     async def update_order_book(
         self,

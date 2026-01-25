@@ -898,7 +898,7 @@ class PolymarketConnector(HttpFetcherMixin, AsyncHttpFetcherMixin):
             valid_events.sort(key=lambda x: pd.Timestamp(x['endDate']))
             target_event = valid_events[0]
 
-            return self._parse_market_data(target_event, include_token_map=False)
+            return self._parse_market_data(target_event, include_token_map=True)
 
         except aiohttp.ClientError as e:
             logger.error(f"Error fetching next market: {e}")

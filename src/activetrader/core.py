@@ -122,8 +122,10 @@ class FingerBlasterCore:
         self.callback_manager = CallbackManager()
         
         # State
-        self.resolution_shown = False
-        self.last_resolution: Optional[str] = None
+        # Track which market_id has been resolved to prevent duplicate resolution events
+        # This is market-specific unlike a simple boolean flag
+        self._resolved_market_id: Optional[str] = None
+        self._resolution_timestamp: float = 0.0  # Cooldown for resolution events
         self.last_chart_update: float = 0.0
         self.selected_size: float = 1.0
         self._yes_position: float = 0.0
@@ -328,9 +330,17 @@ class FingerBlasterCore:
             
             self.callback_manager.emit('countdown_update', time_str, urgency, time_remaining)
             
-            # Check for resolution
-            if time_remaining <= 0 and not self.resolution_shown:
-                await self._handle_market_resolution(market)
+            # Check for resolution - use market-specific tracking to prevent duplicates
+            market_id = market.get('market_id')
+            if time_remaining <= 0:
+                # Only trigger resolution if this specific market hasn't been resolved yet
+                # Also enforce a cooldown to prevent rapid-fire events during transitions
+                now = time.time()
+                already_resolved = (self._resolved_market_id == market_id)
+                in_cooldown = (now - self._resolution_timestamp < 5.0)  # 5 second cooldown
+
+                if not already_resolved and not in_cooldown:
+                    await self._handle_market_resolution(market)
         except Exception as e:
             logger.debug(f"Error updating countdown: {e}")
 
@@ -506,13 +516,21 @@ class FingerBlasterCore:
 
             try:
                 self.log_msg(f"New Market Found: {market.get('title', 'Unknown')}")
-                self.resolution_shown = False
 
-                # Set market in manager
-                await self.market_manager.set_market(market)
+                # Set market in manager FIRST before clearing any state
+                if not await self.market_manager.set_market(market):
+                    logger.error(f"Failed to set market {market_id} - validation failed")
+                    self.log_msg(f"⚠️ Failed to switch to market (validation error)")
+                    return
 
                 # Subscribe WebSocket
                 await self.ws_manager.subscribe_to_market(market)
+
+                # NOW it's safe to clear resolution tracking since new market is confirmed
+                # The new market has a different ID so it won't match _resolved_market_id
+                # Clear the old resolved ID to free memory (not strictly necessary but cleaner)
+                logger.debug(f"Clearing resolved market tracking (was: {self._resolved_market_id})")
+                self._resolved_market_id = None
 
                 # Reset positions on new market
                 self._yes_position = 0.0
@@ -527,6 +545,8 @@ class FingerBlasterCore:
                 # Immediately try to resolve strike if dynamic
                 if market.get('price_to_beat') in ('Dynamic', 'Pending', 'N/A', '', None):
                     asyncio.create_task(self._try_resolve_pending_strike())
+
+                logger.info(f"Successfully switched to market {market_id} (ends {market.get('end_date')})")
 
             finally:
                 # Clear the switching flag after transition completes (success or failure)
@@ -555,7 +575,13 @@ class FingerBlasterCore:
 
     async def _handle_market_resolution(self, market: Dict[str, Any]) -> None:
         """Handle market expiry, emit event, and migrate to next market."""
-        self.resolution_shown = True
+        market_id = market.get('market_id')
+
+        # Mark this specific market as resolved with timestamp
+        self._resolved_market_id = market_id
+        self._resolution_timestamp = time.time()
+
+        logger.info(f"Market {market_id} resolved - emitting EXPIRED event")
         self.log_msg("⚠️ MARKET EXPIRED - Searching for next market...")
         self.callback_manager.emit('resolution', "EXPIRED")
 
