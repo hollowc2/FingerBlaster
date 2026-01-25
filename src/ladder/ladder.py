@@ -20,82 +20,52 @@ from src.ladder.ladder_data import DOMRow as DOMRowData, DOMViewModel
 
 logger = logging.getLogger("LadderUI")
 
-# --- 1. Constants ---
-
-# Column widths for the 5-column layout
-COL_NO_SIZE = 12      # Volume bar (right-aligned)
-COL_NO_PRICE = 5      # NO price display
-COL_YES_PRICE = 5     # YES price display
-COL_YES_SIZE = 12     # Volume bar (left-aligned)
-COL_MY_ORDERS = 10    # User orders
-TOTAL_WIDTH = COL_NO_SIZE + COL_NO_PRICE + COL_YES_PRICE + COL_YES_SIZE + COL_MY_ORDERS + 4  # +4 for borders
+COL_NO_SIZE = 12
+COL_NO_PRICE = 5
+COL_YES_PRICE = 5
+COL_YES_SIZE = 12
+COL_MY_ORDERS = 10
+TOTAL_WIDTH = COL_NO_SIZE + COL_NO_PRICE + COL_YES_PRICE + COL_YES_SIZE + COL_MY_ORDERS + 4
 
 class Side(Enum):
     YES = "YES"
     NO = "NO"
 
 
-# --- 2. Volume Bar Renderer ---
 
 class VolumeBarRenderer:
-    """Renders horizontal volume bars using Unicode block characters."""
+    """Renders volume bars using Unicode block characters."""
 
-    # Left-extending blocks for YES side (0/8 to 8/8, extend from left edge)
     BLOCKS_LEFT = " ▏▎▍▌▋▊▉█"
-
-    # Right-extending blocks for NO side (extend from right edge)
-    # Unicode only provides ▕ (1/8) and ▐ (4/8), so we approximate:
-    # 0=space, 1-2=▕, 3-6=▐, 7-8=█
     BLOCKS_RIGHT = " ▕▕▐▐▐▐██"
 
     def __init__(self, max_width: int = 10):
         self.max_width = max_width
 
-    def render_bar(
-        self,
-        depth: float,
-        max_depth: float,
-        align_right: bool = False
-    ) -> str:
-        """
-        Render a volume bar with absolute scaling.
-
-        Args:
-            depth: Volume at this price level
-            max_depth: Maximum volume across ALL price levels
-            align_right: If True, bar grows from right-to-left (for NO column)
-
-        Returns:
-            String of block characters representing volume
-        """
+    def render_bar(self, depth: float, max_depth: float, align_right: bool = False) -> str:
+        """Render a volume bar. align_right=True for NO side (right-to-left)."""
         if max_depth <= 0 or depth <= 0:
             return " " * self.max_width
 
-        # Calculate bar length as fraction of max
         fraction = min(1.0, depth / max_depth)
         total_eighths = int(fraction * self.max_width * 8)
 
         full_blocks = total_eighths // 8
         remainder = total_eighths % 8
 
-        # Build bar string with appropriate partial block characters
         if align_right:
-            # NO side: partial block FIRST (left), then full blocks (right)
-            # This puts the partial's empty left side into the padding, full blocks flush against NO column
             bar = ""
             if remainder > 0 and full_blocks < self.max_width:
                 bar += self.BLOCKS_RIGHT[remainder]
             bar += "█" * full_blocks
             return bar.rjust(self.max_width)
         else:
-            # YES side: full blocks first, then partial block at end
             bar = "█" * full_blocks
             if remainder > 0 and full_blocks < self.max_width:
                 bar += self.BLOCKS_LEFT[remainder]
             return bar.ljust(self.max_width)
 
 
-# --- 3. Confirmation Dialog ---
 
 class HelpOverlay(ModalScreen):
     """Modal overlay showing all keyboard shortcuts."""
@@ -368,7 +338,6 @@ class OrderConfirmationDialog(ModalScreen):
         self.dismiss(False)
 
 
-# --- 4. DOM Row Widget ---
 
 class DOMRowWidget(Horizontal):
     """A single row in the 5-column DOM display."""
@@ -475,23 +444,19 @@ class DOMRowWidget(Horizontal):
         is_best_bid: bool,
         is_best_ask: bool
     ):
-        """Update the row's display data."""
-        # Update bar displays
         try:
             self.query_one(f"#no-size-{self.row_id}", Static).update(no_bar)
             self.query_one(f"#yes-size-{self.row_id}", Static).update(yes_bar)
             self.query_one(f"#orders-{self.row_id}", Static).update(my_orders_display)
         except Exception:
-            pass  # Widget may not be mounted yet
+            pass
 
-        # Update styling
         self.set_class(is_cursor, "cursor-row")
         self.set_class(is_spread, "spread-row")
         self.set_class(is_best_bid, "best-bid-row")
         self.set_class(is_best_ask, "best-ask-row")
 
 
-# --- 5. Main Application ---
 
 class PolyTerm(App):
     """DOM-style ladder trading terminal for Polymarket."""
@@ -761,7 +726,7 @@ class PolyTerm(App):
             logger.debug(f"Error updating countdown: {e}")
 
     def update_ladder(self):
-        """Main refresh loop for the DOM UI."""
+        """Refresh DOM UI."""
         view_model: DOMViewModel = self.ladder_core.get_dom_view_model()
 
         for price_cent, row_widget in self.rows.items():
@@ -769,26 +734,11 @@ class PolyTerm(App):
             if not dom_row:
                 continue
 
-            # Render volume bars
-            # NO: align_right=True creates "   ███" so blocks touch right edge with text-align: right
-            # YES: align_right=False creates "███   " so blocks touch left edge with text-align: left
-            no_bar = self.bar_renderer.render_bar(
-                dom_row.no_depth,
-                view_model.max_depth,
-                align_right=True  # Blocks on right of string, flush against NO price
-            )
-            yes_bar = self.bar_renderer.render_bar(
-                dom_row.yes_depth,
-                view_model.max_depth,
-                align_right=False  # Blocks on left of string, flush against YES price
-            )
+            no_bar = self.bar_renderer.render_bar(dom_row.no_depth, view_model.max_depth, align_right=True)
+            yes_bar = self.bar_renderer.render_bar(dom_row.yes_depth, view_model.max_depth, align_right=False)
 
-            # Format user orders for display
             orders_display = self._format_orders(dom_row.my_orders)
-
-            # Check for filled orders (visual feedback)
-            is_filled = self.ladder_core.is_filled(price_cent)
-            if is_filled and not orders_display:
+            if self.ladder_core.is_filled(price_cent) and not orders_display:
                 orders_display = "[FILL]"
 
             row_widget.update_data(
@@ -802,37 +752,22 @@ class PolyTerm(App):
             )
 
     def _format_orders(self, orders: List) -> str:
-        """Format user orders for display in My Orders column."""
         if not orders:
             return ""
-
-        parts = []
-        for order in orders:
-            size_display = int(order.size)
-            side_short = "Y" if order.side == "YES" else "N"
-            parts.append(f"[{size_display}{side_short}]")
-
-        return "".join(parts)[:10]  # Truncate to column width
+        parts = [f"[{int(o.size)}{'Y' if o.side == 'YES' else 'N'}]" for o in orders]
+        return "".join(parts)[:10]
 
     def _scroll_to_cursor(self):
-        """Scroll view to keep cursor visible."""
         if self.selected_price_cent in self.rows:
-            self.scroll_view.scroll_to_widget(
-                self.rows[self.selected_price_cent],
-                animate=False
-            )
+            self.scroll_view.scroll_to_widget(self.rows[self.selected_price_cent], animate=False)
 
-    # --- Actions ---
+    # Actions
 
     def action_move_cursor(self, delta: int):
-        """Move cursor up or down by delta ticks."""
-        # Invert delta: up arrow (-1) should increase price (move toward 99)
-        new_price = self.selected_price_cent - delta
-        self.selected_price_cent = max(1, min(99, new_price))
+        self.selected_price_cent = max(1, min(99, self.selected_price_cent - delta))
         self._scroll_to_cursor()
 
     def action_center_view(self):
-        """Center view on mid-price (between best bid and best ask)."""
         view_model = self.ladder_core.get_dom_view_model()
         self.selected_price_cent = view_model.mid_price_cent
         self._scroll_to_cursor()
@@ -840,16 +775,9 @@ class PolyTerm(App):
 
     @work
     async def action_place_market_order(self, side_str: str):
-        """Place a market order (Y for YES, N for NO) with confirmation."""
         confirmed = await self.push_screen_wait(
-            OrderConfirmationDialog(
-                order_type="Market",
-                side=side_str,
-                price=None,
-                order_size=float(self.order_size)
-            )
+            OrderConfirmationDialog("Market", side_str, None, float(self.order_size))
         )
-
         if not confirmed:
             self.notify("Order cancelled", severity="information")
             return
@@ -862,56 +790,32 @@ class PolyTerm(App):
 
     @work
     async def action_place_limit_order(self, side_str: str):
-        """
-        Place limit order at cursor price.
-
-        The "Flick" workflow:
-        - User scrolls to YES price 5 (row showing YES=5, NO=95)
-        - Presses 'b' to Buy NO
-        - This places a Limit Buy NO at price 95 (in NO terms = 0.95)
-        """
         price_cent = self.selected_price_cent
-
         confirmed = await self.push_screen_wait(
-            OrderConfirmationDialog(
-                order_type="Limit",
-                side=side_str,
-                price=price_cent,
-                order_size=float(self.order_size)
-            )
+            OrderConfirmationDialog("Limit", side_str, price_cent, float(self.order_size))
         )
-
         if not confirmed:
             self.notify("Order cancelled", severity="information")
             return
 
-        order_id = await self.ladder_core.place_limit_order(
-            price_cent,
-            float(self.order_size),
-            side_str
-        )
-
+        order_id = await self.ladder_core.place_limit_order(price_cent, float(self.order_size), side_str)
         if order_id:
             self.notify(f"Limit {side_str} @ {price_cent}c placed")
         else:
             self.notify(f"Limit {side_str} @ {price_cent}c failed", severity="error")
 
     def action_adj_size(self, delta: int):
-        """Adjust order size."""
         self.order_size = max(1, self.order_size + delta)
         self.query_one("#size-display").update(f"SIZE: {self.order_size}")
 
     def action_show_help(self):
-        """Show keyboard shortcuts help overlay."""
         self.push_screen(HelpOverlay())
 
     def on_click(self, event) -> None:
-        """Handle click events on help button."""
         if hasattr(event, 'widget') and event.widget.id == "help-button":
             self.action_show_help()
 
     async def action_cancel_all(self):
-        """Cancel ALL open orders across all price levels."""
         canceled_count = await self.ladder_core.cancel_all_orders()
         if canceled_count > 0:
             self.notify(f"Cancelled {canceled_count} order(s)", severity="warning")
@@ -919,7 +823,6 @@ class PolyTerm(App):
             self.notify("No open orders to cancel", severity="information")
 
     async def action_cancel_at_cursor(self):
-        """Cancel all orders at cursor price."""
         price_cent = self.selected_price_cent
         canceled_count = await self.ladder_core.cancel_all_at_price(price_cent)
         if canceled_count > 0:
@@ -928,7 +831,6 @@ class PolyTerm(App):
             self.notify("No orders at cursor", severity="information")
 
     async def action_flatten(self):
-        """Flatten all positions."""
         async def flatten_and_notify():
             try:
                 await self.ladder_core.fb.flatten_all()
@@ -936,7 +838,6 @@ class PolyTerm(App):
             except Exception as e:
                 logger.error(f"Flatten failed: {e}")
                 self.notify(f"Flatten failed: {e}", severity="error")
-
         asyncio.create_task(flatten_and_notify())
 
 
