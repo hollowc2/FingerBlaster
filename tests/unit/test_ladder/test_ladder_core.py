@@ -943,14 +943,11 @@ class TestErrorHandling:
         assert ladder_core._extract_order_id([{'orderID': 'abc'}]) is None
 
     def test_on_order_filled_with_none_order_id(self, ladder_core):
-        """Test order filled callback with None order_id raises TypeError.
-
-        Note: The implementation doesn't guard against None order_id when logging.
-        This test documents the current behavior.
-        """
-        # None order_id causes TypeError in log statement (order_id[:10])
-        with pytest.raises(TypeError):
-            ladder_core._on_order_filled('YES', 10.0, 0.50, None)
+        """Test order filled callback with None order_id returns early without error."""
+        # None order_id is now handled gracefully with early return
+        ladder_core._on_order_filled('YES', 10.0, 0.50, None)
+        # No exception raised, no state changes
+        assert len(ladder_core.filled_orders) == 0
 
     def test_on_order_filled_with_zero_price(self, ladder_core):
         """Test order filled callback handles zero price (out of bounds)."""
@@ -1001,20 +998,44 @@ class TestErrorHandling:
 
     @pytest.mark.asyncio
     async def test_place_limit_order_with_zero_price(self, ladder_core, mock_fb_core):
-        """Test placing order with zero price division edge case."""
+        """Test placing order with zero price is rejected."""
+        # Price at 0 is out of valid range
+        order_id = await ladder_core.place_limit_order(0, 10.0, 'YES')
+
+        # Should be rejected without calling API
+        assert order_id is None
+        mock_fb_core.connector.create_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_place_limit_order_with_price_100(self, ladder_core, mock_fb_core):
+        """Test placing order with price 100 is rejected."""
+        # Price at 100 is out of valid range
+        order_id = await ladder_core.place_limit_order(100, 10.0, 'YES')
+
+        # Should be rejected without calling API
+        assert order_id is None
+        mock_fb_core.connector.create_order.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_place_limit_order_at_valid_boundary(self, ladder_core, mock_fb_core):
+        """Test placing order at valid boundary prices succeeds."""
         mock_fb_core.market_manager.get_token_map = AsyncMock(
             return_value={'Up': '0x' + '1' * 64}
         )
-        # Price at 0 would cause division issue in min size calc
-        # But 0 is out of valid range so it should still work
         mock_fb_core.connector.create_order = MagicMock(
             return_value={'orderID': 'order123'}
         )
 
+        # Price at 1 is valid minimum
         order_id = await ladder_core.place_limit_order(1, 10.0, 'YES')
-
-        # Should succeed at minimum valid price
         assert order_id == 'order123'
+
+        # Price at 99 is valid maximum
+        mock_fb_core.connector.create_order = MagicMock(
+            return_value={'orderID': 'order456'}
+        )
+        order_id = await ladder_core.place_limit_order(99, 10.0, 'YES')
+        assert order_id == 'order456'
 
     def test_on_market_update_with_none_values(self, ladder_core):
         """Test market update callback handles None values."""
@@ -1038,23 +1059,20 @@ class TestErrorHandling:
         ladder_core._on_market_update("$95000", "12:00PM", "Test Market")
 
     def test_is_pending_with_malformed_pending_orders(self, ladder_core):
-        """Test is_pending behavior with malformed order data.
-
-        Note: The implementation doesn't guard against missing 'price' key.
-        This test documents the current behavior.
-        """
-        # Orders missing 'price' will raise KeyError when checked
+        """Test is_pending handles malformed order data gracefully."""
+        # Orders missing 'price' are handled via .get() returning None
         ladder_core.pending_orders = {
             'order1': {'price': 50},  # Valid, missing size (ok for is_pending)
         }
         assert ladder_core.is_pending(50) is True
         assert ladder_core.is_pending(60) is False
 
-        # Adding malformed orders will cause KeyError
+        # Malformed orders (missing 'price' key) are safely ignored
         ladder_core.pending_orders['order2'] = {'size': 10.0}  # Missing price
 
-        with pytest.raises(KeyError):
-            ladder_core.is_pending(60)
+        # No exception, malformed order doesn't match any price
+        assert ladder_core.is_pending(60) is False
+        assert ladder_core.is_pending(50) is True  # Valid order still matches
 
 
 # ========== NO Side Price Conversion Tests ==========

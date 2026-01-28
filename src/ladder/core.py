@@ -44,7 +44,7 @@ class LadderCore:
 
     def is_pending(self, price_cent: int) -> bool:
         """Check if there's a pending order at this price."""
-        return any(ord['price'] == price_cent for ord in self.pending_orders.values())
+        return any(ord.get('price') == price_cent for ord in self.pending_orders.values())
 
     def is_filled(self, price_cent: int) -> bool:
         """Check if an order at this price was recently filled."""
@@ -57,6 +57,10 @@ class LadderCore:
     
     def _on_order_filled(self, side: str, size: float, price: float, order_id: str) -> None:
         """Match filled order to pending/active orders and update state."""
+        if not order_id:
+            logger.debug("Received order fill with empty order_id")
+            return
+
         # Direct match by order ID
         if order_id in self.pending_orders:
             order_data = self.pending_orders.pop(order_id)
@@ -159,6 +163,10 @@ class LadderCore:
 
     async def place_limit_order(self, price_cent: int, size: float, side: str) -> Optional[str]:
         """Place a limit order at the given price in USDC."""
+        if not PRICE_CENT_RANGE[0] <= price_cent <= PRICE_CENT_RANGE[1]:
+            logger.warning(f"Price {price_cent}c out of valid range {PRICE_CENT_RANGE}")
+            return None
+
         temp_id = f"tmp_{price_cent}_{asyncio.get_event_loop().time()}"
         self.pending_orders[temp_id] = {"price": price_cent, "size": size, "side": side}
         self.dirty = True
@@ -226,7 +234,8 @@ class LadderCore:
             raw_books = self.fb.market_manager.raw_books
             up_book = raw_books.get('Up', {'bids': {}, 'asks': {}})
             down_book = raw_books.get('Down', {'bids': {}, 'asks': {}})
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Error fetching raw_books for view model: {e}")
             return self.last_ladder
 
         ladder = self.data_manager.build_ladder_data(up_book, down_book)

@@ -40,14 +40,14 @@ WEBSOCKET_STARTUP_DELAY = 2.0
 class VolumeBarRenderer:
     """Renders volume bars using Unicode block characters."""
 
-    BLOCKS_LEFT = " ▏▎▍▌▋▊▉█"
-    BLOCKS_RIGHT = "█▉▊▋▌▍▎▏ "[::-1]  # Mirror of BLOCKS_LEFT for right alignment
+    # Unicode blocks: index 0 = empty, index 8 = full block
+    BLOCKS = " ▏▎▍▌▋▊▉█"
 
     def __init__(self, max_width: int = 10):
         self.max_width = max_width
 
     def render_bar(self, depth: float, max_depth: float, align_right: bool = False) -> str:
-        """Render a volume bar. align_right=True for NO side (right-to-left)."""
+        """Render a volume bar. align_right=True for NO side (right-justified)."""
         if max_depth <= 0 or depth <= 0:
             return " " * self.max_width
 
@@ -56,16 +56,11 @@ class VolumeBarRenderer:
         full_blocks = total_eighths // 8
         remainder = total_eighths % 8
 
-        if align_right:
-            bar = "█" * full_blocks
-            if remainder > 0 and full_blocks < self.max_width:
-                bar += self.BLOCKS_RIGHT[remainder]
-            return bar.rjust(self.max_width)
-
         bar = "█" * full_blocks
         if remainder > 0 and full_blocks < self.max_width:
-            bar += self.BLOCKS_LEFT[remainder]
-        return bar.ljust(self.max_width)
+            bar += self.BLOCKS[remainder]
+
+        return bar.rjust(self.max_width) if align_right else bar.ljust(self.max_width)
 
 
 
@@ -439,8 +434,8 @@ class DOMRowWidget(Horizontal):
             self.query_one(f"#no-size-{self.row_id}", Static).update(no_bar)
             self.query_one(f"#yes-size-{self.row_id}", Static).update(yes_bar)
             self.query_one(f"#orders-{self.row_id}", Static).update(my_orders_display)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to update row {self.row_id}: {e}")
 
         self.set_class(is_cursor, "cursor-row")
         self.set_class(is_spread, "spread-row")

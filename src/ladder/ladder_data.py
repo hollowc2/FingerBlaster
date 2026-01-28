@@ -1,7 +1,10 @@
 """Data normalization for Polymarket ladder UI."""
 
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+
+logger = logging.getLogger("LadderData")
 
 # Constants
 PRICE_SCALE = 100  # Convert price (0-1) to cents (0-100)
@@ -67,7 +70,8 @@ class LadderDataManager:
                 if PRICE_RANGE[0] <= cent < PRICE_RANGE[1]:  # Use < for exclusive upper bound
                     field = "yes_ask" if is_complement else "yes_bid"
                     ladder[cent][field] += float(size)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                logger.debug(f"Invalid bid price={price} size={size}: {e}")
                 continue
 
     def build_dom_data(
@@ -120,7 +124,8 @@ class LadderDataManager:
                 if PRICE_RANGE[0] <= cent < PRICE_RANGE[1]:  # Use < for exclusive upper bound
                     rows[cent].yes_depth += float(size)
                     max_depth = max(max_depth, rows[cent].yes_depth)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                logger.debug(f"Invalid up_bid price={price} size={size}: {e}")
                 continue
 
         # Down Bids → NO depth at complementary price
@@ -130,7 +135,8 @@ class LadderDataManager:
                 if PRICE_RANGE[0] <= yes_cent < PRICE_RANGE[1]:  # Use < for exclusive upper bound
                     rows[yes_cent].no_depth += float(size)
                     max_depth = max(max_depth, rows[yes_cent].no_depth)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
+                logger.debug(f"Invalid down_bid price={price} size={size}: {e}")
                 continue
 
         return max_depth
