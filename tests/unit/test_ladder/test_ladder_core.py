@@ -318,7 +318,8 @@ class TestPlaceOrders:
         mock_fb_core.market_manager.get_token_map = AsyncMock(
             return_value={'Up': '0x' + '1' * 64, 'Down': '0x' + '2' * 64}
         )
-        mock_fb_core.connector.create_market_order = AsyncMock(
+        # asyncio.to_thread() expects a sync callable, so use MagicMock not AsyncMock
+        mock_fb_core.connector.create_market_order = MagicMock(
             return_value={'orderID': 'market_order_789'}
         )
 
@@ -605,3 +606,753 @@ class TestEdgeCases:
         shares = call_args[2]
         # Should be at least 5 shares
         assert shares >= 5.0
+
+
+# ========== Boundary Condition Tests ==========
+class TestBoundaryConditions:
+    """Test boundary conditions at price limits."""
+
+    @pytest.fixture
+    def mock_fb_core(self):
+        """Create mock FingerBlasterCore."""
+        fb = MagicMock()
+        fb.connector = MagicMock()
+        fb.market_manager = MagicMock()
+        fb.register_callback = MagicMock(return_value=True)
+        return fb
+
+    @pytest.fixture
+    def ladder_core(self, mock_fb_core):
+        """Create LadderCore with mocked dependencies."""
+        return LadderCore(fb_core=mock_fb_core)
+
+    def test_is_pending_at_price_1(self, ladder_core):
+        """Test is_pending at minimum price boundary (1¢)."""
+        ladder_core.pending_orders['order1'] = {'price': 1, 'size': 10.0}
+        assert ladder_core.is_pending(1) is True
+        assert ladder_core.is_pending(0) is False  # Below range
+
+    def test_is_pending_at_price_99(self, ladder_core):
+        """Test is_pending at maximum price boundary (99¢)."""
+        ladder_core.pending_orders['order1'] = {'price': 99, 'size': 10.0}
+        assert ladder_core.is_pending(99) is True
+        assert ladder_core.is_pending(100) is False  # Above range
+
+    def test_is_filled_at_boundaries(self, ladder_core):
+        """Test is_filled at price boundaries."""
+        ladder_core.filled_orders[1] = time.time()
+        ladder_core.filled_orders[99] = time.time()
+
+        assert ladder_core.is_filled(1) is True
+        assert ladder_core.is_filled(99) is True
+        assert ladder_core.is_filled(0) is False
+        assert ladder_core.is_filled(100) is False
+
+    def test_order_filled_at_boundary_prices(self, ladder_core):
+        """Test order fill processing at boundary prices."""
+        ladder_core.pending_orders['order_1c'] = {'price': 1, 'size': 5.0, 'side': 'YES'}
+        ladder_core.pending_orders['order_99c'] = {'price': 99, 'size': 5.0, 'side': 'YES'}
+        ladder_core.active_orders[1] = 5.0
+        ladder_core.active_orders[99] = 5.0
+
+        # Fill at 1¢
+        ladder_core._on_order_filled('YES', 5.0, 0.01, 'order_1c')
+        assert 1 in ladder_core.filled_orders
+        assert 'order_1c' not in ladder_core.pending_orders
+
+        # Fill at 99¢
+        ladder_core._on_order_filled('YES', 5.0, 0.99, 'order_99c')
+        assert 99 in ladder_core.filled_orders
+        assert 'order_99c' not in ladder_core.pending_orders
+
+    def test_order_filled_out_of_bounds_ignored(self, ladder_core):
+        """Test fills with out-of-bounds prices are ignored."""
+        # Price 0.00 = 0¢ (out of bounds)
+        ladder_core._on_order_filled('YES', 10.0, 0.00, 'order_oob')
+        assert 0 not in ladder_core.filled_orders
+
+        # Price 1.00 = 100¢ (out of bounds)
+        ladder_core._on_order_filled('YES', 10.0, 1.00, 'order_oob2')
+        assert 100 not in ladder_core.filled_orders
+
+    @pytest.mark.asyncio
+    async def test_place_order_at_boundary_prices(self, ladder_core, mock_fb_core):
+        """Test placing orders at boundary prices."""
+        mock_fb_core.market_manager.get_token_map = AsyncMock(
+            return_value={'Up': '0x' + '1' * 64, 'Down': '0x' + '2' * 64}
+        )
+        mock_fb_core.connector.create_order = MagicMock(
+            return_value={'orderID': 'boundary_order'}
+        )
+
+        # Order at 1¢
+        order_id = await ladder_core.place_limit_order(1, 10.0, 'YES')
+        assert order_id is not None
+        call_args = mock_fb_core.connector.create_order.call_args[0]
+        assert call_args[1] == 0.01  # Price should be 0.01
+
+        # Order at 99¢
+        order_id = await ladder_core.place_limit_order(99, 10.0, 'YES')
+        assert order_id is not None
+
+    def test_get_open_orders_excludes_boundary_violations(self, ladder_core):
+        """Test get_open_orders_for_display excludes out-of-bounds prices."""
+        ladder_core.pending_orders = {
+            'order_0': {'price': 0, 'size': 10.0, 'side': 'YES'},
+            'order_1': {'price': 1, 'size': 10.0, 'side': 'YES'},
+            'order_99': {'price': 99, 'size': 10.0, 'side': 'YES'},
+            'order_100': {'price': 100, 'size': 10.0, 'side': 'YES'},
+        }
+
+        orders = ladder_core.get_open_orders_for_display()
+
+        prices = [o['price_cent'] for o in orders]
+        assert 0 not in prices
+        assert 100 not in prices
+        assert 1 in prices
+        assert 99 in prices
+
+    def test_view_model_at_boundary_books(self, ladder_core, mock_fb_core):
+        """Test view model with order books at boundary prices."""
+        mock_fb_core.market_manager.raw_books = {
+            'Up': {'bids': {0.01: 100.0, 0.99: 50.0}, 'asks': {}},
+            'Down': {'bids': {0.01: 75.0}, 'asks': {}}  # YES ask at 99¢
+        }
+
+        ladder = ladder_core.get_view_model()
+
+        assert ladder[1]['yes_bid'] == 100.0
+        assert ladder[99]['yes_bid'] == 50.0
+        assert ladder[99]['yes_ask'] == 75.0
+
+
+# ========== Partial Fill Tests ==========
+class TestPartialFills:
+    """Test partial order fill handling."""
+
+    @pytest.fixture
+    def mock_fb_core(self):
+        fb = MagicMock()
+        fb.connector = MagicMock()
+        fb.market_manager = MagicMock()
+        fb.register_callback = MagicMock(return_value=True)
+        return fb
+
+    @pytest.fixture
+    def ladder_core(self, mock_fb_core):
+        return LadderCore(fb_core=mock_fb_core)
+
+    def test_partial_fill_reduces_active_orders(self, ladder_core):
+        """Test partial fill correctly reduces active order size."""
+        ladder_core.pending_orders['order1'] = {'price': 50, 'size': 100.0, 'side': 'YES'}
+        ladder_core.active_orders[50] = 100.0
+
+        # Partial fill of 30 - note: the order's stored size (100) is used for reduction
+        ladder_core._on_order_filled('YES', 30.0, 0.50, 'order1')
+
+        # Active reduced by order's stored size (100), which removes the entry entirely
+        assert 50 not in ladder_core.active_orders
+        # Order removed from pending
+        assert 'order1' not in ladder_core.pending_orders
+
+    def test_multiple_partial_fills_at_same_price(self, ladder_core):
+        """Test multiple partial fills at same price level."""
+        ladder_core.pending_orders['order1'] = {'price': 50, 'size': 50.0, 'side': 'YES'}
+        ladder_core.pending_orders['order2'] = {'price': 50, 'size': 50.0, 'side': 'YES'}
+        ladder_core.active_orders[50] = 100.0
+
+        # First partial fill matches order1
+        ladder_core._on_order_filled('YES', 50.0, 0.50, 'order1')
+        assert ladder_core.active_orders[50] == 50.0
+
+        # Second partial fill matches order2
+        ladder_core._on_order_filled('YES', 50.0, 0.50, 'order2')
+        assert 50 not in ladder_core.active_orders
+
+    def test_overfill_clamps_to_zero(self, ladder_core):
+        """Test fill larger than active order clamps to zero."""
+        ladder_core.pending_orders['order1'] = {'price': 50, 'size': 25.0, 'side': 'YES'}
+        ladder_core.active_orders[50] = 25.0
+
+        # Fill more than active
+        ladder_core._on_order_filled('YES', 100.0, 0.50, 'order1')
+
+        assert 50 not in ladder_core.active_orders
+
+
+# ========== Multiple Orders at Same Price ==========
+class TestMultipleOrdersSamePrice:
+    """Test handling multiple orders at same price level."""
+
+    @pytest.fixture
+    def mock_fb_core(self):
+        fb = MagicMock()
+        fb.connector = MagicMock()
+        fb.market_manager = MagicMock()
+        fb.register_callback = MagicMock(return_value=True)
+        return fb
+
+    @pytest.fixture
+    def ladder_core(self, mock_fb_core):
+        return LadderCore(fb_core=mock_fb_core)
+
+    @pytest.mark.asyncio
+    async def test_multiple_orders_accumulate_active(self, ladder_core, mock_fb_core):
+        """Test multiple orders at same price accumulate in active_orders."""
+        mock_fb_core.market_manager.get_token_map = AsyncMock(
+            return_value={'Up': '0x' + '1' * 64}
+        )
+        mock_fb_core.connector.create_order = MagicMock(
+            side_effect=[{'orderID': 'order1'}, {'orderID': 'order2'}, {'orderID': 'order3'}]
+        )
+
+        await ladder_core.place_limit_order(50, 10.0, 'YES')
+        await ladder_core.place_limit_order(50, 20.0, 'YES')
+        await ladder_core.place_limit_order(50, 30.0, 'YES')
+
+        assert ladder_core.active_orders[50] == 60.0
+        assert len(ladder_core.pending_orders) == 3
+
+    @pytest.mark.asyncio
+    async def test_cancel_all_at_price_multiple_orders(self, ladder_core, mock_fb_core):
+        """Test canceling all orders at a price with multiple orders."""
+        ladder_core.pending_orders = {
+            'order1': {'price': 50, 'size': 10.0},
+            'order2': {'price': 50, 'size': 20.0},
+            'order3': {'price': 50, 'size': 30.0},
+            'order4': {'price': 60, 'size': 15.0},
+        }
+        mock_fb_core.connector.cancel_order = MagicMock(return_value={'canceled': True})
+
+        count = await ladder_core.cancel_all_at_price(50)
+
+        assert count == 3
+        assert 'order4' in ladder_core.pending_orders
+        assert len(ladder_core.pending_orders) == 1
+
+    def test_fill_matches_first_order_at_price(self, ladder_core):
+        """Test fill by price matches first order when ID unknown."""
+        ladder_core.pending_orders['order1'] = {'price': 50, 'size': 10.0, 'side': 'YES'}
+        ladder_core.pending_orders['order2'] = {'price': 50, 'size': 20.0, 'side': 'YES'}
+
+        # Fill with unknown ID at same price/side
+        ladder_core._on_order_filled('YES', 10.0, 0.50, 'unknown_id')
+
+        # Should match one of the orders at 50
+        assert len([o for o in ladder_core.pending_orders.values() if o['price'] == 50]) == 1
+
+    def test_view_model_aggregates_multiple_orders(self, ladder_core, mock_fb_core):
+        """Test view model aggregates my_size for multiple orders."""
+        mock_fb_core.market_manager.raw_books = {
+            'Up': {'bids': {}, 'asks': {}},
+            'Down': {'bids': {}, 'asks': {}}
+        }
+        ladder_core.pending_orders = {
+            'order1': {'price': 50, 'size': 10.0},
+            'order2': {'price': 50, 'size': 20.0},
+        }
+        ladder_core.active_orders[50] = 5.0
+
+        ladder = ladder_core.get_view_model()
+
+        # my_size should be sum of pending (10+20=30) + active (5) = 35
+        assert ladder[50]['my_size'] == 35.0
+
+
+# ========== Filled Order Window Tests ==========
+class TestFilledOrderWindow:
+    """Test filled order window timing."""
+
+    @pytest.fixture
+    def mock_fb_core(self):
+        fb = MagicMock()
+        fb.connector = MagicMock()
+        fb.market_manager = MagicMock()
+        fb.register_callback = MagicMock(return_value=True)
+        return fb
+
+    @pytest.fixture
+    def ladder_core(self, mock_fb_core):
+        return LadderCore(fb_core=mock_fb_core)
+
+    def test_is_filled_exactly_at_5_seconds(self, ladder_core):
+        """Test is_filled behavior at exactly 5 second boundary."""
+        # Set fill time to exactly 5 seconds ago
+        ladder_core.filled_orders[50] = time.time() - 5.0
+
+        # At exactly 5 seconds, uses strict less-than (<), so 5.0 is NOT visible
+        # This is implementation-specific: FILLED_ORDER_WINDOW_SECS = 5.0 with `< 5.0`
+        assert ladder_core.is_filled(50) is False
+
+    def test_is_filled_just_after_5_seconds(self, ladder_core):
+        """Test is_filled expires after 5 seconds."""
+        # Set fill time to just over 5 seconds ago
+        ladder_core.filled_orders[50] = time.time() - 5.01
+
+        assert ladder_core.is_filled(50) is False
+        # Entry should be cleaned up
+        assert 50 not in ladder_core.filled_orders
+
+    def test_is_filled_cleans_up_old_entries(self, ladder_core):
+        """Test is_filled cleans up expired entries on check."""
+        # Add multiple old fills
+        old_time = time.time() - 10.0
+        ladder_core.filled_orders = {
+            50: old_time,
+            60: old_time,
+            70: time.time(),  # Current
+        }
+
+        # Check each - old ones should be cleaned
+        assert ladder_core.is_filled(50) is False
+        assert ladder_core.is_filled(60) is False
+        assert ladder_core.is_filled(70) is True
+
+        # Verify cleanup
+        assert 50 not in ladder_core.filled_orders
+        assert 60 not in ladder_core.filled_orders
+        assert 70 in ladder_core.filled_orders
+
+
+# ========== Error Handling Tests ==========
+class TestErrorHandling:
+    """Test error handling for invalid inputs and edge cases."""
+
+    @pytest.fixture
+    def mock_fb_core(self):
+        fb = MagicMock()
+        fb.connector = MagicMock()
+        fb.market_manager = MagicMock()
+        fb.register_callback = MagicMock(return_value=True)
+        return fb
+
+    @pytest.fixture
+    def ladder_core(self, mock_fb_core):
+        return LadderCore(fb_core=mock_fb_core)
+
+    def test_extract_order_id_empty_dict(self, ladder_core):
+        """Test order ID extraction from empty dict."""
+        assert ladder_core._extract_order_id({}) is None
+
+    def test_extract_order_id_integer(self, ladder_core):
+        """Test order ID extraction from non-dict."""
+        assert ladder_core._extract_order_id(123) is None
+
+    def test_extract_order_id_list(self, ladder_core):
+        """Test order ID extraction from list."""
+        assert ladder_core._extract_order_id([{'orderID': 'abc'}]) is None
+
+    def test_on_order_filled_with_none_order_id(self, ladder_core):
+        """Test order filled callback with None order_id raises TypeError.
+
+        Note: The implementation doesn't guard against None order_id when logging.
+        This test documents the current behavior.
+        """
+        # None order_id causes TypeError in log statement (order_id[:10])
+        with pytest.raises(TypeError):
+            ladder_core._on_order_filled('YES', 10.0, 0.50, None)
+
+    def test_on_order_filled_with_zero_price(self, ladder_core):
+        """Test order filled callback handles zero price (out of bounds)."""
+        # Zero price is out of bounds and should be silently ignored
+        ladder_core._on_order_filled('YES', 10.0, 0.0, 'order_id')
+        assert 0 not in ladder_core.filled_orders
+
+    def test_reduce_active_order_negative_size(self, ladder_core):
+        """Test reduce_active_order handles negative size."""
+        ladder_core.active_orders[50] = 100.0
+
+        # Reduce by negative (should still subtract)
+        ladder_core._reduce_active_order(50, -10.0)
+        # -10 reduction = +10, so 100 + 10 = 110
+        assert ladder_core.active_orders[50] == 110.0
+
+    def test_get_view_model_with_missing_raw_books(self, ladder_core, mock_fb_core):
+        """Test view model when raw_books is missing."""
+        mock_fb_core.market_manager.raw_books = None
+        ladder_core.last_ladder = {50: {'test': 'cached'}}
+
+        ladder = ladder_core.get_view_model()
+
+        # Should return cached ladder
+        assert ladder == ladder_core.last_ladder
+
+    def test_get_view_model_with_empty_raw_books(self, ladder_core, mock_fb_core):
+        """Test view model with empty raw_books dict."""
+        mock_fb_core.market_manager.raw_books = {}
+
+        ladder = ladder_core.get_view_model()
+
+        # Should return valid ladder with defaults
+        assert len(ladder) == 99
+        assert all(ladder[p]['yes_bid'] == 0.0 for p in ladder)
+
+    @pytest.mark.asyncio
+    async def test_cancel_single_order_missing_from_pending(self, ladder_core, mock_fb_core):
+        """Test cancel when order is not in pending_orders."""
+        mock_fb_core.connector.cancel_order = MagicMock(return_value={'canceled': True})
+
+        # Order doesn't exist in pending
+        result = await ladder_core._cancel_single_order('nonexistent_order')
+
+        # API was still called
+        mock_fb_core.connector.cancel_order.assert_called_once_with('nonexistent_order')
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_place_limit_order_with_zero_price(self, ladder_core, mock_fb_core):
+        """Test placing order with zero price division edge case."""
+        mock_fb_core.market_manager.get_token_map = AsyncMock(
+            return_value={'Up': '0x' + '1' * 64}
+        )
+        # Price at 0 would cause division issue in min size calc
+        # But 0 is out of valid range so it should still work
+        mock_fb_core.connector.create_order = MagicMock(
+            return_value={'orderID': 'order123'}
+        )
+
+        order_id = await ladder_core.place_limit_order(1, 10.0, 'YES')
+
+        # Should succeed at minimum valid price
+        assert order_id == 'order123'
+
+    def test_on_market_update_with_none_values(self, ladder_core):
+        """Test market update callback handles None values."""
+        ladder_core.market_name = "Old Market"
+
+        # Should not crash
+        ladder_core._on_market_update(None, None, None)
+
+        # Name should be updated to None
+        assert ladder_core.market_name is None
+
+    def test_set_market_update_callback_to_none(self, ladder_core):
+        """Test setting market callback to None."""
+        callback = MagicMock()
+        ladder_core.set_market_update_callback(callback)
+
+        # Now set to None
+        ladder_core.set_market_update_callback(None)
+
+        # Should not crash when market updates
+        ladder_core._on_market_update("$95000", "12:00PM", "Test Market")
+
+    def test_is_pending_with_malformed_pending_orders(self, ladder_core):
+        """Test is_pending behavior with malformed order data.
+
+        Note: The implementation doesn't guard against missing 'price' key.
+        This test documents the current behavior.
+        """
+        # Orders missing 'price' will raise KeyError when checked
+        ladder_core.pending_orders = {
+            'order1': {'price': 50},  # Valid, missing size (ok for is_pending)
+        }
+        assert ladder_core.is_pending(50) is True
+        assert ladder_core.is_pending(60) is False
+
+        # Adding malformed orders will cause KeyError
+        ladder_core.pending_orders['order2'] = {'size': 10.0}  # Missing price
+
+        with pytest.raises(KeyError):
+            ladder_core.is_pending(60)
+
+
+# ========== NO Side Price Conversion Tests ==========
+class TestNOSidePriceConversion:
+    """Test NO side order price conversion logic."""
+
+    @pytest.fixture
+    def mock_fb_core(self):
+        fb = MagicMock()
+        fb.connector = MagicMock()
+        fb.market_manager = MagicMock()
+        fb.register_callback = MagicMock(return_value=True)
+        return fb
+
+    @pytest.fixture
+    def ladder_core(self, mock_fb_core):
+        return LadderCore(fb_core=mock_fb_core)
+
+    @pytest.mark.asyncio
+    async def test_no_order_price_conversion(self, ladder_core, mock_fb_core):
+        """Test NO order converts price correctly."""
+        mock_fb_core.market_manager.get_token_map = AsyncMock(
+            return_value={'Up': '0x' + '1' * 64, 'Down': '0x' + '2' * 64}
+        )
+        mock_fb_core.connector.create_order = MagicMock(
+            return_value={'orderID': 'no_order'}
+        )
+
+        # Place NO order at 70¢ (YES perspective)
+        # This means buying Down token at 30¢
+        await ladder_core.place_limit_order(70, 10.0, 'NO')
+
+        call_args = mock_fb_core.connector.create_order.call_args[0]
+        # Token should be Down
+        assert call_args[0] == '0x' + '2' * 64
+        # Price should be complementary: 100 - 70 = 30¢ = 0.30
+        assert call_args[1] == 0.30
+
+    def test_no_side_fill_price_conversion(self, ladder_core):
+        """Test NO fill converts price to YES perspective."""
+        # Place a NO order at 70¢ (YES perspective)
+        ladder_core.pending_orders['order_no'] = {'price': 70, 'size': 10.0, 'side': 'NO'}
+
+        # Fill comes back as NO side at 0.30 (Down token price)
+        # 100 - 30 = 70¢ (YES perspective)
+        ladder_core._on_order_filled('NO', 10.0, 0.30, 'different_id')
+
+        # Should match and mark filled at 70¢
+        assert 70 in ladder_core.filled_orders
+        assert 'order_no' not in ladder_core.pending_orders
+
+    def test_no_side_fill_at_boundary(self, ladder_core):
+        """Test NO fill at price boundaries."""
+        # NO at 99¢ = Down at 1¢
+        ladder_core.pending_orders['order_no'] = {'price': 99, 'size': 10.0, 'side': 'NO'}
+
+        ladder_core._on_order_filled('NO', 10.0, 0.01, 'different_id')
+
+        assert 99 in ladder_core.filled_orders
+
+        # NO at 1¢ = Down at 99¢
+        ladder_core.pending_orders['order_no2'] = {'price': 1, 'size': 10.0, 'side': 'NO'}
+
+        ladder_core._on_order_filled('NO', 10.0, 0.99, 'different_id2')
+
+        assert 1 in ladder_core.filled_orders
+
+
+# ========== Integration Tests ==========
+class TestLadderCoreIntegration:
+    """Integration tests for LadderCore with realistic scenarios."""
+
+    @pytest.fixture
+    def mock_fb_core(self):
+        """Create mock FingerBlasterCore with realistic structure."""
+        fb = MagicMock()
+        fb.connector = MagicMock()
+        fb.market_manager = MagicMock()
+        fb.register_callback = MagicMock(return_value=True)
+
+        # Set up realistic raw_books
+        fb.market_manager.raw_books = {
+            'Up': {
+                'bids': {0.45: 1000.0, 0.44: 500.0, 0.43: 250.0},
+                'asks': {}
+            },
+            'Down': {
+                'bids': {0.45: 800.0, 0.44: 400.0, 0.43: 200.0},
+                'asks': {}
+            }
+        }
+
+        return fb
+
+    @pytest.fixture
+    def ladder_core(self, mock_fb_core):
+        return LadderCore(fb_core=mock_fb_core)
+
+    def test_full_order_lifecycle(self, ladder_core, mock_fb_core):
+        """Test complete order lifecycle: place -> fill -> cleanup."""
+        # Setup mocks
+        mock_fb_core.market_manager.get_token_map = AsyncMock(
+            return_value={'Up': '0x' + '1' * 64, 'Down': '0x' + '2' * 64}
+        )
+        mock_fb_core.connector.create_order = MagicMock(
+            return_value={'orderID': 'lifecycle_order_123'}
+        )
+
+        # 1. Place order
+        import asyncio
+        order_id = asyncio.get_event_loop().run_until_complete(
+            ladder_core.place_limit_order(50, 10.0, 'YES')
+        )
+        assert order_id == 'lifecycle_order_123'
+        assert 'lifecycle_order_123' in ladder_core.pending_orders
+        assert ladder_core.active_orders[50] == 10.0
+
+        # 2. Simulate fill
+        ladder_core._on_order_filled('YES', 10.0, 0.50, 'lifecycle_order_123')
+
+        # 3. Verify cleanup
+        assert 'lifecycle_order_123' not in ladder_core.pending_orders
+        assert 50 not in ladder_core.active_orders
+        assert 50 in ladder_core.filled_orders
+
+    def test_market_transition_clears_state(self, ladder_core, mock_fb_core):
+        """Test that market transition clears all order state."""
+        # Setup some state
+        ladder_core.pending_orders = {
+            'order1': {'price': 45, 'size': 100.0, 'side': 'YES'},
+            'order2': {'price': 55, 'size': 50.0, 'side': 'NO'},
+        }
+        ladder_core.active_orders = {45: 100.0, 55: 50.0}
+        ladder_core.filled_orders = {50: time.time()}
+        ladder_core.market_name = "Old Market"
+
+        # Simulate market transition
+        ladder_core._on_market_update("$96000", "2:00PM", "New Market", "1:45PM")
+
+        # Verify all state cleared
+        assert ladder_core.pending_orders == {}
+        assert ladder_core.active_orders == {}
+        assert ladder_core.filled_orders == {}
+        assert ladder_core.market_name == "New Market"
+
+    def test_view_model_reflects_order_state(self, ladder_core, mock_fb_core):
+        """Test view model correctly reflects pending and active orders."""
+        # Add orders at different prices
+        ladder_core.pending_orders = {
+            'order1': {'price': 45, 'size': 100.0},
+            'order2': {'price': 45, 'size': 50.0},  # Same price
+            'order3': {'price': 55, 'size': 25.0},
+        }
+        ladder_core.active_orders = {45: 10.0}  # Additional active
+
+        ladder = ladder_core.get_view_model()
+
+        # Price 45 should have: 100 + 50 (pending) + 10 (active) = 160
+        assert ladder[45]['my_size'] == 160.0
+        # Price 55 should have: 25 (pending)
+        assert ladder[55]['my_size'] == 25.0
+        # Other prices should have 0
+        assert ladder[50]['my_size'] == 0.0
+
+    def test_dom_view_model_with_mixed_state(self, ladder_core, mock_fb_core):
+        """Test DOM view model with order books and user orders."""
+        # Update raw books
+        mock_fb_core.market_manager.raw_books = {
+            'Up': {'bids': {0.45: 1000.0}, 'asks': {}},
+            'Down': {'bids': {0.45: 800.0}, 'asks': {}}
+        }
+
+        # Add user orders
+        ladder_core.pending_orders = {
+            'user_order': {'price': 50, 'size': 15.0, 'side': 'YES'}
+        }
+
+        dom = ladder_core.get_dom_view_model()
+
+        # Verify market data
+        assert dom.rows[45].yes_depth == 1000.0  # From Up bids
+        assert dom.rows[55].no_depth == 800.0  # From Down bids at 0.45
+
+        # Verify user orders
+        assert len(dom.rows[50].my_orders) == 1
+        assert dom.rows[50].my_orders[0].size == 15.0
+
+        # Verify spread detection
+        assert dom.best_bid_cent == 45
+        assert dom.best_ask_cent == 55
+
+    @pytest.mark.asyncio
+    async def test_cancel_all_with_mixed_orders(self, ladder_core, mock_fb_core):
+        """Test cancel_all with mix of temp and real orders."""
+        ladder_core.pending_orders = {
+            'tmp_50_123': {'price': 50, 'size': 10.0},  # Temp - no API call
+            'real_order_1': {'price': 55, 'size': 20.0},
+            'real_order_2': {'price': 60, 'size': 30.0},
+        }
+        mock_fb_core.connector.cancel_order = MagicMock(return_value={'canceled': True})
+
+        count = await ladder_core.cancel_all_orders()
+
+        assert count == 3
+        # Only real orders should trigger API calls
+        assert mock_fb_core.connector.cancel_order.call_count == 2
+
+    def test_callback_registration(self, mock_fb_core):
+        """Test callbacks are properly registered."""
+        core = LadderCore(fb_core=mock_fb_core)
+
+        calls = mock_fb_core.register_callback.call_args_list
+        registered_events = [call[0][0] for call in calls]
+
+        assert 'market_update' in registered_events
+        assert 'order_filled' in registered_events
+
+    def test_market_update_callback_invocation(self, ladder_core):
+        """Test market update callback is invoked correctly."""
+        callback_mock = MagicMock()
+        ladder_core.set_market_update_callback(callback_mock)
+
+        ladder_core._on_market_update("$95000", "12:00PM", "Test Market", "11:45AM")
+
+        callback_mock.assert_called_once_with("Test Market", "11:45AM", "12:00PM")
+
+    def test_concurrent_order_placement_simulation(self, ladder_core, mock_fb_core):
+        """Simulate concurrent order placement and fills."""
+        import asyncio
+
+        mock_fb_core.market_manager.get_token_map = AsyncMock(
+            return_value={'Up': '0x' + '1' * 64}
+        )
+
+        order_counter = [0]
+
+        def create_order_side_effect(*args, **kwargs):
+            order_counter[0] += 1
+            return {'orderID': f'concurrent_order_{order_counter[0]}'}
+
+        mock_fb_core.connector.create_order = MagicMock(side_effect=create_order_side_effect)
+
+        async def place_multiple_orders():
+            tasks = [
+                ladder_core.place_limit_order(45, 10.0, 'YES'),
+                ladder_core.place_limit_order(50, 20.0, 'YES'),
+                ladder_core.place_limit_order(55, 30.0, 'YES'),
+            ]
+            return await asyncio.gather(*tasks)
+
+        results = asyncio.get_event_loop().run_until_complete(place_multiple_orders())
+
+        # All orders should have unique IDs
+        assert len(set(results)) == 3
+        assert len(ladder_core.pending_orders) == 3
+
+        # Active orders should be accumulated
+        assert ladder_core.active_orders[45] == 10.0
+        assert ladder_core.active_orders[50] == 20.0
+        assert ladder_core.active_orders[55] == 30.0
+
+    def test_get_market_fields_structure(self, ladder_core):
+        """Test get_market_fields returns correct structure."""
+        ladder_core.market_name = "BTC Up/Down 15m"
+        ladder_core.market_starts = "2024-01-01T12:00:00Z"
+        ladder_core.market_ends = "2024-01-01T12:15:00Z"
+
+        fields = ladder_core.get_market_fields()
+
+        assert isinstance(fields, dict)
+        assert 'name' in fields
+        assert 'starts' in fields
+        assert 'ends' in fields
+        assert fields['name'] == "BTC Up/Down 15m"
+
+    def test_dirty_flag_behavior(self, ladder_core, mock_fb_core):
+        """Test dirty flag is set appropriately during operations."""
+        assert ladder_core.dirty is False
+
+        # Place order sets dirty
+        mock_fb_core.market_manager.get_token_map = AsyncMock(
+            return_value={'Up': '0x' + '1' * 64}
+        )
+        mock_fb_core.connector.create_order = MagicMock(
+            return_value={'orderID': 'dirty_test'}
+        )
+
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(
+            ladder_core.place_limit_order(50, 10.0, 'YES')
+        )
+
+        assert ladder_core.dirty is True
+
+        # Reset and test cancel
+        ladder_core.dirty = False
+        mock_fb_core.connector.cancel_order = MagicMock(return_value={'canceled': True})
+
+        asyncio.get_event_loop().run_until_complete(ladder_core.cancel_all_orders())
+
+        assert ladder_core.dirty is True

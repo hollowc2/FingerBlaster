@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 # Constants
 PRICE_SCALE = 100  # Convert price (0-1) to cents (0-100)
-PRICE_RANGE = (1, 99)
+PRICE_RANGE = (1, 100)  # range(1, 100) produces 1..99 for all valid cent prices
 
 
 @dataclass
@@ -64,7 +64,7 @@ class LadderDataManager:
                 cent = price_to_cent(float(price))
                 if is_complement:
                     cent = PRICE_SCALE - cent
-                if PRICE_RANGE[0] <= cent <= PRICE_RANGE[1]:
+                if PRICE_RANGE[0] <= cent < PRICE_RANGE[1]:  # Use < for exclusive upper bound
                     field = "yes_ask" if is_complement else "yes_bid"
                     ladder[cent][field] += float(size)
             except (ValueError, TypeError):
@@ -117,7 +117,7 @@ class LadderDataManager:
         for price, size in up_bids.items():
             try:
                 cent = price_to_cent(float(price))
-                if PRICE_RANGE[0] <= cent <= PRICE_RANGE[1]:
+                if PRICE_RANGE[0] <= cent < PRICE_RANGE[1]:  # Use < for exclusive upper bound
                     rows[cent].yes_depth += float(size)
                     max_depth = max(max_depth, rows[cent].yes_depth)
             except (ValueError, TypeError):
@@ -127,7 +127,7 @@ class LadderDataManager:
         for price, size in down_bids.items():
             try:
                 yes_cent = PRICE_SCALE - price_to_cent(float(price))
-                if PRICE_RANGE[0] <= yes_cent <= PRICE_RANGE[1]:
+                if PRICE_RANGE[0] <= yes_cent < PRICE_RANGE[1]:  # Use < for exclusive upper bound
                     rows[yes_cent].no_depth += float(size)
                     max_depth = max(max_depth, rows[yes_cent].no_depth)
             except (ValueError, TypeError):
@@ -147,7 +147,7 @@ class LadderDataManager:
         """Add user orders to corresponding rows."""
         for order in user_orders:
             price_cent = order.get('price_cent')
-            if price_cent and PRICE_RANGE[0] <= price_cent <= PRICE_RANGE[1]:
+            if price_cent and PRICE_RANGE[0] <= price_cent < PRICE_RANGE[1]:  # Use < for exclusive upper bound
                 rows[price_cent].my_orders.append(UserOrder(
                     order_id=order.get('order_id', ''),
                     size=order.get('size', 0.0),
