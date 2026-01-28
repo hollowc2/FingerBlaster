@@ -40,7 +40,6 @@ class DOMViewModel:
 
 
 def price_to_cent(price: float) -> int:
-    """Convert price (0-1.0) to cents (0-100)."""
     return int(round(price * PRICE_SCALE))
 
 
@@ -114,7 +113,6 @@ class LadderDataManager:
         )
 
     def _populate_order_depths(self, up_bids: Dict, down_bids: Dict, rows: Dict[int, DOMRow]) -> float:
-        """Populate order depths from Up and Down books, return max depth."""
         max_depth = 0.0
 
         # Up Bids → YES depth
@@ -142,7 +140,6 @@ class LadderDataManager:
         return max_depth
 
     def _find_best_levels(self, rows: Dict[int, DOMRow]) -> tuple:
-        """Find best bid and ask prices from rows."""
         yes_bids = [p for p, r in rows.items() if r.yes_depth > 0]
         yes_asks = [p for p, r in rows.items() if r.no_depth > 0]
         best_bid = max(yes_bids) if yes_bids else 0
@@ -150,7 +147,6 @@ class LadderDataManager:
         return best_bid, best_ask
 
     def _populate_user_orders(self, user_orders: List[Dict], rows: Dict[int, DOMRow]) -> None:
-        """Add user orders to corresponding rows."""
         for order in user_orders:
             price_cent = order.get('price_cent')
             if price_cent and PRICE_RANGE[0] <= price_cent < PRICE_RANGE[1]:  # Use < for exclusive upper bound
@@ -161,7 +157,6 @@ class LadderDataManager:
                 ))
 
     def _calculate_mid_price(self, best_bid: int, best_ask: int) -> int:
-        """Calculate mid price from best bid/ask."""
         if best_bid > 0 and best_ask < PRICE_SCALE:
             return (best_bid + best_ask) // 2
         return best_bid if best_bid > 0 else (best_ask if best_ask < PRICE_SCALE else 50)

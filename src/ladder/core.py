@@ -43,11 +43,9 @@ class LadderCore:
         self.fb.register_callback('order_filled', self._on_order_filled)
 
     def is_pending(self, price_cent: int) -> bool:
-        """Check if there's a pending order at this price."""
         return any(ord.get('price') == price_cent for ord in self.pending_orders.values())
 
     def is_filled(self, price_cent: int) -> bool:
-        """Check if an order at this price was recently filled."""
         if price_cent not in self.filled_orders:
             return False
         if time.time() - self.filled_orders[price_cent] < FILLED_ORDER_WINDOW_SECS:
@@ -97,7 +95,6 @@ class LadderCore:
             logger.debug(f"Could not match fill for order {order_id[:10]}...")
 
     def _reduce_active_order(self, price_cent: int, size: float) -> None:
-        """Reduce or remove active order at price level."""
         if price_cent not in self.active_orders:
             return
         self.active_orders[price_cent] = max(0, self.active_orders[price_cent] - size)
@@ -146,7 +143,6 @@ class LadderCore:
             return False
 
     def _extract_order_id(self, order_resp: Any) -> Optional[str]:
-        """Extract order ID from response dict."""
         if not isinstance(order_resp, dict):
             return None
         # Try common keys in order of likelihood
@@ -162,7 +158,6 @@ class LadderCore:
         return token_map.get(token_key)
 
     async def place_limit_order(self, price_cent: int, size: float, side: str) -> Optional[str]:
-        """Place a limit order at the given price in USDC."""
         if not PRICE_CENT_RANGE[0] <= price_cent <= PRICE_CENT_RANGE[1]:
             logger.warning(f"Price {price_cent}c out of valid range {PRICE_CENT_RANGE}")
             return None
@@ -207,7 +202,6 @@ class LadderCore:
             return None
 
     async def place_market_order(self, size: float, side: str) -> Optional[str]:
-        """Place a market order for the given side and size in USDC."""
         try:
             target_token = await self._get_target_token(side)
             if not target_token:
@@ -229,7 +223,6 @@ class LadderCore:
             return None
 
     def get_view_model(self) -> Dict[int, Dict]:
-        """Build ladder view with order books and user orders overlaid."""
         try:
             raw_books = self.fb.market_manager.raw_books
             up_book = raw_books.get('Up', {'bids': {}, 'asks': {}})
@@ -253,7 +246,6 @@ class LadderCore:
         return ladder
 
     def get_open_orders_for_display(self) -> List[Dict]:
-        """Get pending orders as list of {order_id, price_cent, size, side}."""
         result = []
         for oid, od in self.pending_orders.items():
             price = od.get('price')
@@ -267,7 +259,6 @@ class LadderCore:
         return result
 
     def get_dom_view_model(self) -> DOMViewModel:
-        """Build 5-column DOM view model with spread detection."""
         try:
             raw_books = self.fb.market_manager.raw_books
         except Exception as e:
@@ -279,7 +270,6 @@ class LadderCore:
         return self.data_manager.build_dom_data(up_book, down_book, self.get_open_orders_for_display())
 
     def _on_market_update(self, strike: str, ends: str, market_name: str, starts: str = None) -> None:
-        """Handle market update, clearing order state on market change."""
         is_new_market = (self.market_name != market_name)
         self.market_name = market_name
         self.market_starts = starts or ""

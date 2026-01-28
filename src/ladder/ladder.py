@@ -633,7 +633,6 @@ class PolyTerm(App):
         asyncio.create_task(self.update_balance())
 
     async def _initialize_market(self) -> None:
-        """Initialize market and WebSocket connection."""
         market = await self.ladder_core.fb.connector.get_active_market()
         if not market:
             self.notify("No active market found", severity="warning")
@@ -654,12 +653,10 @@ class PolyTerm(App):
         await asyncio.sleep(WEBSOCKET_STARTUP_DELAY)
 
     def _center_initial(self):
-        """Center on initial price after mount."""
         self.selected_price_cent = 50
         self._scroll_to_cursor()
 
     def _on_market_update(self, market_name: str, starts: str, ends: str) -> None:
-        """Handle market update - update header title and time range."""
         try:
             self.title = market_name if market_name else "POLYMARKET DOM LADDER"
             time_display = self._format_time_range(starts, ends)
@@ -668,7 +665,6 @@ class PolyTerm(App):
             logger.debug(f"Error updating market display: {e}")
 
     def _format_time_range(self, starts: str, ends: str) -> str:
-        """Format start and end times into display string."""
         try:
             import pandas as pd
 
@@ -695,7 +691,6 @@ class PolyTerm(App):
             return ends if ends else "Loading..."
 
     async def update_balance(self):
-        """Update wallet balance display."""
         try:
             balance = await self.ladder_core.fb.connector.get_usdc_balance()
             self.balance = balance
@@ -704,21 +699,18 @@ class PolyTerm(App):
             logger.debug(f"Error updating balance: {e}")
 
     async def _update_market_status(self) -> None:
-        """Poll for new markets and handle transitions."""
         try:
             await self.ladder_core.fb.update_market_status()
         except Exception as e:
             logger.debug(f"Market status update error: {e}")
 
     async def _update_countdown(self) -> None:
-        """Update countdown timer and check for market expiry."""
         try:
             await self.ladder_core.fb.update_countdown()
         except Exception as e:
             logger.debug(f"Countdown update error: {e}")
 
     def update_ladder(self) -> None:
-        """Refresh DOM UI."""
         view_model = self.ladder_core.get_dom_view_model()
 
         for price_cent, row_widget in self.rows.items():
@@ -745,7 +737,6 @@ class PolyTerm(App):
 
     @staticmethod
     def _format_orders(orders: List) -> str:
-        """Format user orders for display."""
         if not orders:
             return ""
         parts = [f"[{int(o.size)}{'Y' if o.side == 'YES' else 'N'}]" for o in orders]
@@ -826,7 +817,6 @@ class PolyTerm(App):
 
     @work
     async def action_flatten(self) -> None:
-        """Flatten all positions with market order."""
         try:
             await self.ladder_core.fb.flatten_all()
             self.notify("Flattening all positions...", severity="warning")
