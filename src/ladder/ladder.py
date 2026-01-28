@@ -2,34 +2,38 @@
 
 import asyncio
 import logging
-from dataclasses import dataclass
-from enum import Enum
 from typing import Dict, List, Optional
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, ScrollableContainer, Center, Middle, Vertical
-from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Header, Footer, Static, Label
+from textual.widgets import Header, Static, Label
 
 from src.ladder.core import LadderCore
-from src.ladder.ladder_data import DOMRow as DOMRowData, DOMViewModel
+from src.ladder.ladder_data import DOMViewModel
 
 logger = logging.getLogger("LadderUI")
 
+# UI Layout Constants
 COL_NO_SIZE = 12
 COL_NO_PRICE = 5
 COL_YES_PRICE = 5
 COL_YES_SIZE = 12
 COL_MY_ORDERS = 10
-TOTAL_WIDTH = COL_NO_SIZE + COL_NO_PRICE + COL_YES_PRICE + COL_YES_SIZE + COL_MY_ORDERS + 4
+SEPARATOR_WIDTH = 4  # Spacing between columns
 
-class Side(Enum):
-    YES = "YES"
-    NO = "NO"
+# Timing constants
+UPDATE_FREQUENCY = 0.1  # 10 FPS
+BALANCE_UPDATE_FREQUENCY = 2.0
+MARKET_STATUS_FREQUENCY = 5.0
+COUNTDOWN_FREQUENCY = 0.2
+
+# Chart update delay for market initialization
+MARKET_CONNECT_DELAY = 1.0
+WEBSOCKET_STARTUP_DELAY = 2.0
 
 
 
@@ -37,7 +41,7 @@ class VolumeBarRenderer:
     """Renders volume bars using Unicode block characters."""
 
     BLOCKS_LEFT = " ▏▎▍▌▋▊▉█"
-    BLOCKS_RIGHT = " ▕▕▐▐▐▐██"
+    BLOCKS_RIGHT = "█▉▊▋▌▍▎▏ "[::-1]  # Mirror of BLOCKS_LEFT for right alignment
 
     def __init__(self, max_width: int = 10):
         self.max_width = max_width
@@ -49,21 +53,19 @@ class VolumeBarRenderer:
 
         fraction = min(1.0, depth / max_depth)
         total_eighths = int(fraction * self.max_width * 8)
-
         full_blocks = total_eighths // 8
         remainder = total_eighths % 8
 
         if align_right:
-            bar = ""
-            if remainder > 0 and full_blocks < self.max_width:
-                bar += self.BLOCKS_RIGHT[remainder]
-            bar += "█" * full_blocks
-            return bar.rjust(self.max_width)
-        else:
             bar = "█" * full_blocks
             if remainder > 0 and full_blocks < self.max_width:
-                bar += self.BLOCKS_LEFT[remainder]
-            return bar.ljust(self.max_width)
+                bar += self.BLOCKS_RIGHT[remainder]
+            return bar.rjust(self.max_width)
+
+        bar = "█" * full_blocks
+        if remainder > 0 and full_blocks < self.max_width:
+            bar += self.BLOCKS_LEFT[remainder]
+        return bar.ljust(self.max_width)
 
 
 
@@ -342,84 +344,73 @@ class OrderConfirmationDialog(ModalScreen):
 class DOMRowWidget(Horizontal):
     """A single row in the 5-column DOM display."""
 
-    DEFAULT_CSS = """
-    DOMRowWidget {
+    DEFAULT_CSS = f"""
+    DOMRowWidget {{
         height: 1;
         width: 100%;
-    }
+    }}
 
-    DOMRowWidget .no-size-col {
-        width: 12;
-        min-width: 12;
-        max-width: 12;
+    DOMRowWidget .no-size-col {{
+        width: {COL_NO_SIZE};
         color: #ff6666;
         padding: 0;
         margin: 0;
         content-align: left middle;
-    }
+    }}
 
-    DOMRowWidget .no-price-col {
-        width: 5;
-        min-width: 5;
-        max-width: 5;
+    DOMRowWidget .no-price-col {{
+        width: {COL_NO_PRICE};
         text-align: center;
         color: #ff4444;
         padding: 0;
         margin: 0;
-    }
+    }}
 
-    DOMRowWidget .yes-price-col {
-        width: 5;
-        min-width: 5;
-        max-width: 5;
+    DOMRowWidget .yes-price-col {{
+        width: {COL_YES_PRICE};
         text-align: center;
         color: #44ff44;
         padding: 0;
         margin: 0;
-    }
+    }}
 
-    DOMRowWidget .yes-size-col {
-        width: 12;
-        min-width: 12;
-        max-width: 12;
+    DOMRowWidget .yes-size-col {{
+        width: {COL_YES_SIZE};
         color: #66ff66;
         padding: 0;
         margin: 0;
         content-align: left middle;
-    }
+    }}
 
-    DOMRowWidget .my-orders-col {
-        width: 10;
+    DOMRowWidget .my-orders-col {{
+        width: {COL_MY_ORDERS};
         text-align: left;
         color: $warning;
         text-style: bold;
-    }
+    }}
 
-    /* Spread highlighting */
-    DOMRowWidget.spread-row {
+    DOMRowWidget.spread-row {{
         background: #1a1a2e;
-    }
+    }}
 
-    /* Best bid/ask highlighting */
-    DOMRowWidget.best-bid-row .yes-price-col {
+    DOMRowWidget.best-bid-row .yes-price-col {{
         text-style: bold;
         color: #00ff00;
-    }
+    }}
 
-    DOMRowWidget.best-ask-row .no-price-col {
+    DOMRowWidget.best-ask-row .no-price-col {{
         text-style: bold;
         color: #ff0000;
-    }
+    }}
 
-    /* Cursor highlighting */
-    DOMRowWidget.cursor-row {
+    DOMRowWidget.cursor-row {{
         background: $accent 30%;
-    }
+    }}
 
     DOMRowWidget.cursor-row .no-price-col,
-    DOMRowWidget.cursor-row .yes-price-col {
+    DOMRowWidget.cursor-row .yes-price-col {{
         text-style: bold;
-    }
+    }}
     """
 
     def __init__(self, price_cent: int):
@@ -461,8 +452,10 @@ class DOMRowWidget(Horizontal):
 class PolyTerm(App):
     """DOM-style ladder trading terminal for Polymarket."""
 
-    CSS = """
-    #market-name {
+    DOM_WIDTH = COL_NO_SIZE + COL_NO_PRICE + COL_YES_PRICE + COL_YES_SIZE + COL_MY_ORDERS
+
+    CSS = f"""
+    #market-name {{
         height: 1;
         width: 100%;
         text-align: center;
@@ -471,59 +464,59 @@ class PolyTerm(App):
         color: $text;
         padding: 0 1;
         border-bottom: solid $primary;
-    }
+    }}
 
-    #dom-container {
+    #dom-container {{
         align: center middle;
         height: 1fr;
         margin: 1 0;
         width: 100%;
-    }
+    }}
 
-    #dom-wrapper {
-        width: 48;
+    #dom-wrapper {{
+        width: {DOM_WIDTH};
         align: center middle;
-    }
+    }}
 
-    #header-labels {
+    #header-labels {{
         height: 1;
-        width: 48;
+        width: {DOM_WIDTH};
         background: $primary-darken-2;
-    }
+    }}
 
-    #header-labels .header-lbl {
+    #header-labels .header-lbl {{
         text-style: bold;
         text-align: center;
-    }
+    }}
 
-    #h-no-size { width: 12; color: #ff4444; }
-    #h-no-px { width: 5; }
-    #h-yes-px { width: 5; }
-    #h-yes-size { width: 12; color: #44ff44; }
-    #h-orders { width: 10; color: $warning; }
+    #h-no-size {{ width: {COL_NO_SIZE}; color: #ff4444; }}
+    #h-no-px {{ width: {COL_NO_PRICE}; }}
+    #h-yes-px {{ width: {COL_YES_PRICE}; }}
+    #h-yes-size {{ width: {COL_YES_SIZE}; color: #44ff44; }}
+    #h-orders {{ width: {COL_MY_ORDERS}; color: $warning; }}
 
-    #dom-scroll {
-        width: 48;
-    }
+    #dom-scroll {{
+        width: {DOM_WIDTH};
+    }}
 
-    #stats-bar {
+    #stats-bar {{
         height: 3;
         dock: bottom;
         background: $surface;
         padding: 0 2;
         border-top: tall $primary;
-    }
+    }}
 
-    #stats-content {
+    #stats-content {{
         width: 1fr;
         align: center middle;
-    }
+    }}
 
-    .stat-val {
+    .stat-val {{
         margin-right: 4;
-    }
+    }}
 
-    #help-button {
+    #help-button {{
         width: auto;
         min-width: 8;
         height: 1;
@@ -532,18 +525,18 @@ class PolyTerm(App):
         color: $text;
         text-style: bold;
         text-align: center;
-    }
+    }}
 
-    #help-button:hover {
+    #help-button:hover {{
         background: $accent;
         color: $text;
         text-style: bold reverse;
-    }
+    }}
 
-    #help-button:focus {
+    #help-button:focus {{
         background: $accent;
         color: $text;
-    }
+    }}
     """
 
     BINDINGS = [
@@ -628,36 +621,42 @@ class PolyTerm(App):
         # Initialize market and start WebSocket connection
         try:
             await self.ladder_core.fb.start_rtds()
-            await asyncio.sleep(1.0)
-
-            market = await self.ladder_core.fb.connector.get_active_market()
-            if market:
-                success = await self.ladder_core.fb.market_manager.set_market(market)
-                if success:
-                    market_name = market.get('question') or market.get('title') or 'Market'
-                    starts = market.get('start_date', '')
-                    ends = market.get('end_date', 'N/A')
-                    strike = market.get('strike', 'Loading')
-                    self.ladder_core._on_market_update(strike, ends, market_name, starts)
-
-                    await self.ladder_core.fb.ws_manager.start()
-                    await asyncio.sleep(2.0)
-                else:
-                    self.notify("Warning: Failed to set market", severity="warning")
-            else:
-                self.notify("Warning: No active market found", severity="warning")
+            await asyncio.sleep(MARKET_CONNECT_DELAY)
+            await self._initialize_market()
         except Exception as e:
-            self.notify(f"Warning: Could not initialize market: {e}", severity="warning")
+            self.notify(f"Initialization error: {e}", severity="warning")
+            logger.error(f"Failed to initialize: {e}", exc_info=True)
 
-        # Update intervals
-        self.set_interval(0.1, self.update_ladder)  # 10 FPS
-        self.set_interval(2.0, self.update_balance)
-        self.set_interval(5.0, self._update_market_status)
-        self.set_interval(0.2, self._update_countdown)
+        # Set update intervals
+        self.set_interval(UPDATE_FREQUENCY, self.update_ladder)
+        self.set_interval(BALANCE_UPDATE_FREQUENCY, self.update_balance)
+        self.set_interval(MARKET_STATUS_FREQUENCY, self._update_market_status)
+        self.set_interval(COUNTDOWN_FREQUENCY, self._update_countdown)
 
         # Center on mid price after initial load
         self.call_after_refresh(self._center_initial)
         asyncio.create_task(self.update_balance())
+
+    async def _initialize_market(self) -> None:
+        """Initialize market and WebSocket connection."""
+        market = await self.ladder_core.fb.connector.get_active_market()
+        if not market:
+            self.notify("No active market found", severity="warning")
+            return
+
+        success = await self.ladder_core.fb.market_manager.set_market(market)
+        if not success:
+            self.notify("Failed to set market", severity="warning")
+            return
+
+        market_name = market.get('question') or market.get('title') or 'Market'
+        starts = market.get('start_date', '')
+        ends = market.get('end_date', 'N/A')
+        strike = market.get('strike', 'Loading')
+        self.ladder_core._on_market_update(strike, ends, market_name, starts)
+
+        await self.ladder_core.fb.ws_manager.start()
+        await asyncio.sleep(WEBSOCKET_STARTUP_DELAY)
 
     def _center_initial(self):
         """Center on initial price after mount."""
@@ -709,25 +708,23 @@ class PolyTerm(App):
         except Exception as e:
             logger.debug(f"Error updating balance: {e}")
 
-    async def _update_market_status(self):
+    async def _update_market_status(self) -> None:
         """Poll for new markets and handle transitions."""
         try:
-            if self.ladder_core and self.ladder_core.fb:
-                await self.ladder_core.fb.update_market_status()
+            await self.ladder_core.fb.update_market_status()
         except Exception as e:
-            logger.debug(f"Error updating market status: {e}")
+            logger.debug(f"Market status update error: {e}")
 
-    async def _update_countdown(self):
+    async def _update_countdown(self) -> None:
         """Update countdown timer and check for market expiry."""
         try:
-            if self.ladder_core and self.ladder_core.fb:
-                await self.ladder_core.fb.update_countdown()
+            await self.ladder_core.fb.update_countdown()
         except Exception as e:
-            logger.debug(f"Error updating countdown: {e}")
+            logger.debug(f"Countdown update error: {e}")
 
-    def update_ladder(self):
+    def update_ladder(self) -> None:
         """Refresh DOM UI."""
-        view_model: DOMViewModel = self.ladder_core.get_dom_view_model()
+        view_model = self.ladder_core.get_dom_view_model()
 
         for price_cent, row_widget in self.rows.items():
             dom_row = view_model.rows.get(price_cent)
@@ -735,7 +732,7 @@ class PolyTerm(App):
                 continue
 
             no_bar = self.bar_renderer.render_bar(dom_row.no_depth, view_model.max_depth, align_right=True)
-            yes_bar = self.bar_renderer.render_bar(dom_row.yes_depth, view_model.max_depth, align_right=False)
+            yes_bar = self.bar_renderer.render_bar(dom_row.yes_depth, view_model.max_depth)
 
             orders_display = self._format_orders(dom_row.my_orders)
             if self.ladder_core.is_filled(price_cent) and not orders_display:
@@ -751,7 +748,9 @@ class PolyTerm(App):
                 is_best_ask=dom_row.is_best_ask
             )
 
-    def _format_orders(self, orders: List) -> str:
+    @staticmethod
+    def _format_orders(orders: List) -> str:
+        """Format user orders for display."""
         if not orders:
             return ""
         parts = [f"[{int(o.size)}{'Y' if o.side == 'YES' else 'N'}]" for o in orders]
@@ -830,15 +829,15 @@ class PolyTerm(App):
         else:
             self.notify("No orders at cursor", severity="information")
 
-    async def action_flatten(self):
-        async def flatten_and_notify():
-            try:
-                await self.ladder_core.fb.flatten_all()
-                self.notify("Flattening all positions...", severity="warning")
-            except Exception as e:
-                logger.error(f"Flatten failed: {e}")
-                self.notify(f"Flatten failed: {e}", severity="error")
-        asyncio.create_task(flatten_and_notify())
+    @work
+    async def action_flatten(self) -> None:
+        """Flatten all positions with market order."""
+        try:
+            await self.ladder_core.fb.flatten_all()
+            self.notify("Flattening all positions...", severity="warning")
+        except Exception as e:
+            logger.error(f"Flatten failed: {e}", exc_info=True)
+            self.notify(f"Flatten failed: {e}", severity="error")
 
 
 if __name__ == "__main__":
